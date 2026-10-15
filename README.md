@@ -5,11 +5,12 @@ live context-window usage, model + reasoning effort, project + elapsed time, ses
 counters, loaded-skills count, git status, and the permission mode.
 
 ```
-■■□□□□□□□□ 18% (181.2k/1M) · [deepseek-v4.1-flash ◑ high] · MY-WORKBENCH ⏱ 24m · ⚙38 ✗1 ↻12 · ✓ Skills (786) · ⎇ main +2 ~1 ?3 · ⏵⏵ bypass
+■■□□□□□□□□ 18% (181.2k/1M) · [deepseek-v4.1-flash ◑ high] · MY-WORKBENCH ⏱ 24m · ✗1 ⚙38 ↻12 · ✓ Skills (786) · ⎇ main +2 ~1 ?3 · ⏵⏵ bypass
 ```
 
 Every value is real: context comes from the harness's own measurement
-(`cmd.getContextUsage()`), the rest from the harness API or a shell command the mod runs.
+(`cmd.getContextUsage()`), falling back to the turn's reported usage where the harness reports
+none; the rest from the harness API or a shell command the mod runs.
 
 This is the Command Code sibling of `mods-dev/prompt-enhancer` (a Claude Code plugin). All
 Command Code mod work lives here under `mods-dev/` with a `cmd-*` prefix.
@@ -103,14 +104,29 @@ COMMANDCODE_STATUSLINE_CONFIG=/tmp/other.json cmd
 the harness's own measurement, wrapped in the CLI bundle as
 `getContextUsage: () => ({tokens: current > 0 ? current : null, contextWindow: limit, percent: ...})`.
 
+It is starved on Command Code 1.82.3, so the segment has a second source. In order:
+
+1. **the harness getter** above — authoritative whenever it reports a measurement;
+2. **the turn's own usage** — the `model_request_end` event's
+   `usage.inputTokens + usage.outputTokens`: the whole prompt that was sent plus what that turn
+   appended, which is the quantity the harness's own compaction logic builds.
+
+Source 2 exists because source 1 was measured answering `{tokens: null, contextWindow: 1000000,
+percent: null}` at **every** lifecycle point — load, session start, run start, request start,
+request end, turn end, run end — across `deepseek-v4.1-flash`, `claude-haiku-5-5` and
+`google/gemini-3.8-flash`, including the turn whose usage reported 67,717 input tokens. With
+source 1 alone the segment drew `—` forever. Full evidence in `docs/investigation.md`.
+
 `■■□□□□□□□□ 18% (181.2k/1M)` — ten cells, rounded to the nearest cell, then the rounded
 percentage, then used/window in parentheses. Token counts carry one decimal where there is
 one: `120k`, `181.2k`, `1M`, `1.1M`. (The host's own formatter keeps a trailing `.0`; this
 one trims it, so `120000` reads `120k` rather than `120.0k`.)
 
-- `tokens`/`percent` are `null` until a model call has measured the window; the segment then
-  renders `□□□□□□□□□□ — (—/1M)` — an empty bar and an em dash, never a misleading `0%`. A
-  `0%` that arrives *with* a token count is a real rounded measurement and is shown as such.
+- `—` appears only when **neither** source has a measurement: an empty bar and an em dash,
+  `□□□□□□□□□□ — (—/1M)`, never a misleading `0%`. A `0%` that arrives *with* a token count is
+  a real rounded measurement and is shown as such.
+- A figure measured before a `/compact` is dropped on `compaction_done`: the harness resets its
+  fill there, so keeping the old number would draw a stale bar.
 - Tone follows the host's own thresholds: green under 50%, yellow at 50%, red at 80%.
 - No hardcoded model→window table and no token accumulation: both are proxies that go wrong
   silently. (The previous revision of this mod did exactly that, then dropped the segment
@@ -119,15 +135,15 @@ one trims it, so `120000` reads `120k` rather than `120.0k`.)
 ## Verify
 
 ```bash
-node --test test/statusline.test.mjs     # 58 tests, no network, no real config touched
+node --test test/statusline.test.mjs     # 63 tests, no network, no real config touched
 cmd mods list                            # registered, no load warnings
 cmd -p "Reply with exactly: ok"          # loads in a session and exits cleanly (no hang)
 ```
 
 The suite drives the real mod file through Node's TypeScript stripping with a fake `ModApi`
-that records every call the mod makes to the host: 58 cases covering each segment, the
+that records every call the mod makes to the host: 63 cases covering each segment, the
 switch and precedence layers, the failure paths and the repaint triggers. `STATUSLINE_MOD=<path>`
-points it at a mutant for mutation testing. Fifteen seeded defects were each caught:
+points it at a mutant for mutation testing. Nineteen seeded defects were each caught:
 
 | Seeded defect | Caught by |
 |---|---|
@@ -146,6 +162,10 @@ points it at a mutant for mutation testing. Fifteen seeded defects were each cau
 | live `refreshSeconds` does not restart the timer | `reconfigures the running refresh interval` |
 | pending repaint not cancelled on clear | `does not let a pending repaint resurrect a cleared status` |
 | `config_setting_changed` resync deleted | `resyncs to the harness when the session config changes the model` |
+| a starved context getter left unhandled (the live incident) | `draws a figure from the turn usage when the harness reports no measurement` |
+| a 0/0 turn usage treated as a measurement | `ignores a turn usage carrying no tokens, which is not a measurement` |
+| the turn usage preferred over the harness measurement | `prefers the harness measurement over the turn usage when both exist` |
+| a pre-compaction figure kept across the reset | `drops the stale figure when a compaction resets the fill` |
 
 ## Layout
 

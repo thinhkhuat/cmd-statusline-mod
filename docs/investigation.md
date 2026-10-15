@@ -175,3 +175,72 @@ route back.
 `permission_mode_changed` event: the API exposes no getter for the current mode, so seeding it
 would mean guessing. It is documented as a limit instead.
 
+## The context figure never arrived (2026-10-15, live)
+
+The restored segment shipped drawing `□□□□□□□□□□ — (—/1M)` and stayed there. Reported from the
+live TUI footer after three turns and seven tool calls — the other segments were live, so the
+render path was never in doubt: `—` is what the mod renders when the harness reports no
+measurement, and the harness was reporting none.
+
+### What was measured
+
+A probe mod loaded beside the real one in a real session recorded `cmd.getContextUsage()` at
+every lifecycle point. It answered
+
+```
+{tokens: null, contextWindow: 1000000, percent: null}
+```
+
+at `probe_load` (`undefined`, pre-bind), `session_start`, `run_start`, `model_request_start`,
+`model_request_end`, `turn_end` and `run_end` — on `deepseek/deepseek-v4.1-flash`,
+`claude-haiku-5-5` and `google/gemini-3.8-flash`. Not provider-specific, and not a timing race:
+the follow-up repaint fires 400 ms after the request settles and still saw `null`.
+
+The measurement existed anyway. The same run logged the turn's own usage:
+
+```
+event_model_request_end {"keys":["effort","model","stopReason","type","usage"],
+  "usage":{"inputTokens":67717,"outputTokens":2,"cacheReadTokens":44544,"cacheWriteTokens":0}}
+hook_onTurnEnd {"usage":{…same…},"messageCount":2,"roles":["user","assistant"],
+  "ctx":{"tokens":null,"contextWindow":1000000,"percent":null}}
+```
+
+`onTurnEnd({state, usage})` is the hook the harness's own context tracker consumes, and it
+received 67,717 input tokens while the mod-facing getter answered `null` in the same breath. The
+number was inside the harness and never reached the documented seam.
+
+### Root cause
+
+Read from `dist/cli.mjs` (1.82.3, the latest published — `updates.json` reports nothing pending):
+
+- the mod-facing wrapper maps a non-positive `current` to `tokens: null` —
+  `getContextUsage: () => { const e = A?.getContextUsage?.(); const n = e.current > 0; return {tokens: n ? e.current : null, contextWindow: e.limit, …}; }`
+  — deliberately, so a missing measurement never renders a misleading `0%`;
+- the harness side of it is
+  `Xt = () => ({current: It.getContextTokens({state: Kt, messages: Kt.messages}), limit: _.getContextLimit({model: G()})})`,
+  and `getContextTokens` reads a mod-state value that the built-in tracker
+  (`id: "compaction"`) writes in its own `onTurnEnd`.
+
+So the documented getter is starved in this build while the number is available on the event.
+**The mod was faithful: it drew exactly what the API reported.**
+
+### Fix
+
+`model_request_end`'s `usage` is now the stand-in — `usage.inputTokens + usage.outputTokens`, the
+prompt that was sent plus what that turn appended, which is the quantity the harness's own
+compaction logic builds. The harness getter still wins whenever it reports a measurement, and a
+figure measured before a compaction is dropped on `compaction_done`, because the harness resets
+its fill there and the old number would draw a stale bar.
+
+Four tests pin it, each proven to bite on its own seeded mutant: the starved getter itself, a
+`0/0` usage treated as a measurement, the precedence reversed, and the pre-compaction figure
+kept. Suite 58 → 63.
+
+### Still open
+
+The asymmetry is worth checking from the host's own side. The built-in `/context` panel reads
+`computeSessionStats`, not this seam, and that path carries an `estimateTokens4(state.messages)`
+fallback for when no provider measurement exists. If `/context` shows real numbers while the
+seam answers `null`, then the seam — not the measurement — is the defect to report upstream, and
+this stand-in can retire.
+

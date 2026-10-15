@@ -44,7 +44,7 @@ globalThis.clearInterval = timer => {
 };
 
 const mod = (await import(MOD_FILE)).default;
-const {parseGitStatus, parseSkillCount, formatTokens, contextBar, contextTone} = await import(MOD_FILE);
+const {parseGitStatus, parseSkillCount, formatTokens, contextBar, contextTone, contextTokensFromUsage} = await import(MOD_FILE);
 
 const strip = text => String(text).replace(/\u001b\[[0-9;]*m/g, '');
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -235,6 +235,46 @@ describe('context segment', () => {
 	it('derives a percent when the harness sends only tokens and window', async () => {
 		const t = await boot({context: {tokens: 250_000, contextWindow: 1_000_000, percent: null}});
 		assert.match(t.status(), /25%/);
+	});
+
+	// The live incident (see docs/investigation.md): on Command Code 1.82.3 the harness
+	// reports no measurement at all — `{tokens: null, contextWindow: 1000000, percent: null}`
+	// at every lifecycle point — while the turn's real usage arrives on model_request_end.
+	// The segment drew `—` forever. These three tests pin the replacement.
+	it('draws a figure from the turn usage when the harness reports no measurement', async () => {
+		const t = await boot({context: {tokens: null, contextWindow: 1_000_000, percent: null}});
+		assert.match(t.status(), /— \(—\/1M\)/, 'the harness alone reports nothing here');
+		await t.fire('model_request_end', {
+			model: 'deepseek/deepseek-v4.1-flash',
+			usage: {inputTokens: 67_717, outputTokens: 2, cacheReadTokens: 44_544, cacheWriteTokens: 0},
+		});
+		assert.match(t.status(), /■□□□□□□□□□ 7% \(67\.7k\/1M\)/, 'the prompt that was sent plus what that turn appended');
+		assert.doesNotMatch(t.status(), /—/, 'no em dash may survive once a turn has been measured');
+	});
+
+	it('prefers the harness measurement over the turn usage when both exist', async () => {
+		let context = {tokens: null, contextWindow: 1_000_000, percent: null};
+		const t = await boot({context: () => context});
+		await t.fire('model_request_end', {model: 'm', usage: {inputTokens: 67_717, outputTokens: 2}});
+		assert.match(t.status(), /67\.7k/, 'the turn usage stands in while the harness reports nothing');
+		context = {tokens: 181_200, contextWindow: 1_000_000, percent: 18};
+		await t.fire('turn_end', {});
+		assert.match(t.status(), /18% \(181\.2k\/1M\)/, 'a harness measurement wins over the turn usage');
+	});
+
+	it('ignores a turn usage carrying no tokens, which is not a measurement', async () => {
+		const t = await boot({context: {tokens: null, contextWindow: 1_000_000, percent: null}});
+		await t.fire('model_request_end', {model: 'm', usage: {inputTokens: 0, outputTokens: 0}});
+		assert.match(t.status(), /— \(—\/1M\)/);
+		assert.doesNotMatch(t.status(), /0%/, 'an empty usage must never read as 0%');
+	});
+
+	it('drops the stale figure when a compaction resets the fill', async () => {
+		const t = await boot({context: {tokens: null, contextWindow: 1_000_000, percent: null}});
+		await t.fire('model_request_end', {model: 'm', usage: {inputTokens: 900_000, outputTokens: 100}});
+		assert.match(t.status(), /90% \(900\.1k\/1M\)/);
+		await t.fire('compaction_done', {});
+		assert.match(t.status(), /— \(—\/1M\)/, 'a figure measured before a compaction is stale and must not survive it');
 	});
 });
 
@@ -671,6 +711,17 @@ describe('pure helpers', () => {
 		assert.equal(contextTone(50), 'warning');
 		assert.equal(contextTone(79), 'warning');
 		assert.equal(contextTone(80), 'danger');
+	});
+
+	it('reads a context measurement out of the turn usage, and nothing out of its absence', () => {
+		assert.equal(contextTokensFromUsage({inputTokens: 67_717, outputTokens: 2, cacheReadTokens: 44_544}), 67_719);
+		assert.equal(contextTokensFromUsage({inputTokens: 120_000}), 120_000);
+		assert.equal(contextTokensFromUsage({cacheReadTokens: 44_544, cacheWriteTokens: 0}), undefined);
+		assert.equal(contextTokensFromUsage({inputTokens: 0, outputTokens: 0}), undefined);
+		assert.equal(contextTokensFromUsage({inputTokens: Number.NaN, outputTokens: Number.POSITIVE_INFINITY}), undefined);
+		assert.equal(contextTokensFromUsage(undefined), undefined);
+		assert.equal(contextTokensFromUsage(null), undefined);
+		assert.equal(contextTokensFromUsage('usage'), undefined);
 	});
 });
 

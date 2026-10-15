@@ -5,7 +5,7 @@
 // (`cmd.ui.widget` exists but renders nowhere, so this mod never uses it.)
 //
 // Segments — real data only, from the harness or the shell; nothing proxied:
-//   ■■□□□□□□□□ 18% (181.2k/1M)    context fill, from cmd.getContextUsage()
+//   ■■□□□□□□□□ 18% (181.2k/1M)    context fill, measured (harness getter, else the turn usage)
 //   [fable-5 ◑ high]              model + effort + activity spinner
 //   news-tracking ⏱ 2m            project (cwd basename) + session elapsed
 //   ✗1 ⚙12 ⚡2 ↻3                 tool errors / calls / subagents / turns, this session
@@ -13,12 +13,17 @@
 //   ⎇ main ↑2↓1 +1 ~3 ?4          git branch, ahead/behind, staged/modified/untracked
 //   ⏵⏵ bypass                     permission mode
 //
-// Context is the harness's own measurement (`cmd.getContextUsage()`), not a guess:
-// `tokens` and `percent` stay null until the first model call of the session has
-// measured the window, so the segment renders an empty bar with `—` rather than a
-// misleading 0%, and hides entirely when the harness has nothing to report. There is
-// no hardcoded model→window table and no token accumulation — those are proxies, and
-// they go wrong silently.
+// Context comes from the harness's own measurement (`cmd.getContextUsage()`) whenever there is
+// one, and from the turn's reported usage otherwise — the `model_request_end` event's
+// `usage.inputTokens + usage.outputTokens`, the same quantity the harness's own compaction
+// logic builds. The stand-in is needed because Command Code 1.82.3 answers
+// `{tokens: null, contextWindow: <n>, percent: null}` at every lifecycle point even after the
+// turn that reported 67,717 input tokens, so the getter alone drew `—` forever (see
+// docs/investigation.md). `—` is rendered only when neither source has a measurement, never a
+// misleading `0%`; the segment hides entirely when there is neither a fill nor a window. No
+// hardcoded model→window table and no accumulation across requests — those are proxies, and
+// they go wrong silently. A figure measured before a compaction is dropped on
+// `compaction_done`, because the harness resets its fill there and the old number is stale.
 //
 // Configuration, precedence (later wins):
 //   1. built-in defaults (DEFAULTS below)
@@ -51,7 +56,7 @@
 //
 // Verify: `cmd mods list` (registered, no warnings) · `cmd --mod <file> -p "hi"` (loads,
 // exits) · `cmd` then /reload, and read the footer row under the input.
-// Test: node --test .statusline-tests/statusline.test.mjs   (49 tests, from this directory)
+// Test: node --test .statusline-tests/statusline.test.mjs   (63 tests, from this directory)
 
 import type {ModApi} from '@commandcode/harness';
 import {mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync} from 'node:fs';
@@ -212,6 +217,19 @@ export function parseSkillCount(out: string): number {
 	return header ? Number(header[1]) : 0;
 }
 
+// The turn's own context measurement, off a `model_request_end` event's `usage`: the whole
+// prompt that was sent (`inputTokens`, the real fill) plus what that turn appended
+// (`outputTokens`) — the same quantity the harness's compaction logic builds. `undefined`
+// when the event carries no usage: that is not a measurement, and must never read as 0%.
+export function contextTokensFromUsage(usage: unknown): number | undefined {
+	if (!usage || typeof usage !== 'object') return undefined;
+	const {inputTokens, outputTokens} = usage as {inputTokens?: unknown; outputTokens?: unknown};
+	const input = typeof inputTokens === 'number' && Number.isFinite(inputTokens) ? inputTokens : 0;
+	const output = typeof outputTokens === 'number' && Number.isFinite(outputTokens) ? outputTokens : 0;
+	const total = input + output;
+	return total > 0 ? total : undefined;
+}
+
 // ── Mod ────────────────────────────────────────────────────────────────────────
 
 export default function (cmd: ModApi): void {
@@ -308,6 +326,9 @@ export default function (cmd: ModApi): void {
 	let gitInfo: GitInfo | undefined;
 	let lastPersistedCounters = JSON.stringify(EMPTY_COUNTERS);
 	let renderBroken = false;
+	// The last completed request's own measurement, and the stand-in for a harness getter that
+	// answers `tokens: null` at every lifecycle point on Command Code 1.82.3 — see docs/investigation.md.
+	let measuredContextTokens: number | undefined;
 
 	let spinTimer: ReturnType<typeof setInterval> | undefined;
 	let refreshTimer: ReturnType<typeof setInterval> | undefined;
@@ -421,15 +442,17 @@ export default function (cmd: ModApi): void {
 		const usage = safe(() =>
 			(cmd as unknown as {getContextUsage?: () => {tokens?: number | null; contextWindow?: number | null; percent?: number | null} | undefined}).getContextUsage?.(),
 		);
-		if (!usage) return undefined;
 
-		const window = typeof usage.contextWindow === 'number' && usage.contextWindow > 0 ? usage.contextWindow : undefined;
-		const tokens = typeof usage.tokens === 'number' && usage.tokens >= 0 ? usage.tokens : undefined;
+		const window = usage && typeof usage.contextWindow === 'number' && usage.contextWindow > 0 ? usage.contextWindow : undefined;
+		const harnessTokens = usage && typeof usage.tokens === 'number' && usage.tokens >= 0 ? usage.tokens : undefined;
+		// The harness's own measurement wins whenever it exists; the last turn's reported usage
+		// stands in when it does not — which is every point on Command Code 1.82.3.
+		const tokens = harnessTokens ?? measuredContextTokens;
 		if (window === undefined && tokens === undefined) return undefined;
 
 		const percent =
 			tokens !== undefined && window !== undefined
-				? Math.max(0, Math.min(100, typeof usage.percent === 'number' ? usage.percent : Math.round((tokens / window) * 100)))
+				? Math.max(0, Math.min(100, harnessTokens !== undefined && usage && typeof usage.percent === 'number' ? usage.percent : Math.round((tokens / window) * 100)))
 				: null;
 
 		const percentLabel = percent === null ? '—' : `${percent}%`;
@@ -576,6 +599,9 @@ export default function (cmd: ModApi): void {
 		if (event.type === 'model_request_end') {
 			currentModel = event.model;
 			if (event.effort) currentEffort = event.effort;
+			// The turn's real usage, kept only until the harness reports a measurement of its own.
+			const measured = contextTokensFromUsage((event as unknown as {usage?: unknown}).usage);
+			if (measured !== undefined) measuredContextTokens = measured;
 		}
 		busy = false;
 		stopSpin();
@@ -604,7 +630,12 @@ export default function (cmd: ModApi): void {
 		if (event.type === 'permission_mode_changed') permissionMode = event.mode;
 		render();
 	});
-	cmd.on('compaction_done', () => render()); // context resets after a compaction
+	cmd.on('compaction_done', () => {
+		// The harness resets its fill after a compaction, so a figure measured before it is
+		// stale: drop it and let the next turn's usage draw the new one.
+		measuredContextTokens = undefined;
+		render(); // context resets after a compaction
+	});
 	cmd.on('turn_end', () => {
 		counters = {...counters, turns: counters.turns + 1};
 		persistCounters();
