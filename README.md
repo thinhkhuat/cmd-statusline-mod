@@ -14,6 +14,8 @@ Every value is real: context comes from the harness's own measurement
 This is the Command Code sibling of `mods-dev/prompt-enhancer` (a Claude Code plugin). All
 Command Code mod work lives here under `mods-dev/` with a `cmd-*` prefix.
 
+Repository: <https://github.com/thinhkhuat/cmd-statusline-mod>
+
 ## Install
 
 **Drop-in (what is live today, verified):**
