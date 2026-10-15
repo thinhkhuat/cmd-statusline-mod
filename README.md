@@ -18,34 +18,38 @@ Repository: <https://github.com/thinhkhuat/cmd-statusline-mod>
 
 ## Install
 
-**Drop-in (what is live today, verified):**
+**Package route — the live one.** Installed once, then upgrades come from the repo:
+
+```bash
+cmd mods add -g thinhkhuat/cmd-statusline-mod    # -g = user scope; clones into mods/.registry/git/…
+cmd mods update                                  # pulls the pushed revision
+```
+
+`cmd mods list` then reports `statusline · user · from git:github.com/thinhkhuat/cmd-statusline-mod`.
+After an update, `/reload` a running session (mods load once per process).
+
+**Release path.** Change it here → `node --test test/statusline.test.mjs` → commit and push →
+`cmd mods update` → `/reload`. `cmd mods update` is the only step that touches the checkout.
+
+**Drop-in route** (the manual alternative, still supported):
 
 ```bash
 ./install.sh              # backups, copies, runs the test suite, lists the mod
 ```
 
-By hand:
+or by hand:
 
 ```bash
 cp statusline.ts ~/.commandcode/mods/statusline.ts
 mkdir -p ~/.commandcode/mods/.statusline-tests
 cp test/statusline.test.mjs ~/.commandcode/mods/.statusline-tests/
-cmd mods list             # must list statusline · user, with no load warning
 ```
 
-Then `/reload` inside a running session (mods load once per process), or start `cmd` fresh.
-
-**Package route** (`cmd mods add`), once you publish this repo:
-
-```bash
-cmd mods add -g ./mods-dev/cmd-statusline-mod   # local path, referenced in place; -g = user scope
-cmd mods add -g thinhkhuat/cmd-statusline-mod   # GitHub shorthand (owner/repo)
-```
-
-> Do not run both routes at once. Both would be named `statusline`, and the host drops the
-> second one — silently as far as `cmd mods list` is concerned, because the "duplicate mod
-> name" line it writes goes to the debug log, not to that output. So remove the drop-in file
-> first: `rm ~/.commandcode/mods/statusline.ts`.
+> Do not run both routes at once. Both are named `statusline` and the first one found wins, so
+> the package's copy is skipped — `cmd mods list` says so under `Warnings`, naming the losing
+> path and `duplicate mod name "statusline" — first one wins`, and the source itself reports
+> `installed, but provides no mods`. Remove the drop-in file before switching:
+> `rm ~/.commandcode/mods/statusline.ts`.
 
 `package.json` is marked `"private": true` so an accidental `npm publish` cannot ship it.
 Publishing to npm (for the bare-name `cmd mods add cmd-statusline-mod` route) means flipping
@@ -147,11 +151,11 @@ points it at a mutant for mutation testing. Fifteen seeded defects were each cau
 
 ```
 statusline.ts                     the mod — the file Command Code loads
-test/statusline.test.mjs          the suite (also installed to .statusline-tests/)
+test/statusline.test.mjs          the suite (the drop-in route also copies it to .statusline-tests/)
 tools/probe-modapi.ts             probe used to confirm the live ModApi shape
 tools/probe-commands.ts           probe used to confirm the slash command registered
 docs/investigation.md             root cause, the evidence trail, and the review round
-install.sh                        backup → copy → test → list
+install.sh                        drop-in route: backup → copy → test → list
 archive/                          superseded revisions (gitignored)
 package.json                      manifest for the cmd mods add route
 ```
@@ -162,9 +166,9 @@ Both probes print to `$PROBE_LOG` (default `/tmp/cmd-probe.log`) and are run lik
 PROBE_LOG=/tmp/probe.log cmd -p --mod tools/probe-modapi.ts "Reply with exactly: ok"
 ```
 
-`statusline.ts` here is the **source of truth**; `~/.commandcode/mods/statusline.ts` is the
-deployed copy. Change it here, run the suite, then re-run `install.sh` — never edit the
-deployed copy in place.
+`statusline.ts` here is the **source of truth**. The live copy is the registry checkout at
+`~/.commandcode/mods/.registry/git/github.com/thinhkhuat/cmd-statusline-mod/`, installed with
+`cmd mods add -g` and refreshed with `cmd mods update`. Never edit either copy in place.
 
 ## Limits
 

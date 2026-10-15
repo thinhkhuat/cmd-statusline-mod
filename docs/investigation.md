@@ -146,12 +146,30 @@ tests cover the escapees. Re-run: all fifteen mutants now fail the suite.
 | `formatTokens` disagreed with the host formatter while the test claimed parity | the suite asserted a false claim | reformatted to the requested style and the test renamed to state the actual rule |
 
 **Claims the reviewer refuted, corrected in these docs.** `cmd mods add --scope user` does not
-exist (it is `-g`); the duplicate-name "load warning" reaches the debug log, not `cmd mods list`;
-the stated reason for the hidden test dir was wrong (a visible subdirectory is resolved as a
-package, not scanned for loose files — the dot dir is still the documented skip); the built-in
-indicator is not simply off below 70%, it turns into a `/compact` nudge past ~180k tokens; the
-sample line used the wrong glyphs for the bar; and the history note counted two context-bearing
-revisions where there are three.
+exist (it is `-g`); the stated reason for the hidden test dir was wrong (a visible subdirectory
+is resolved as a package, not scanned for loose files — the dot dir is still the documented
+skip); the built-in indicator is not simply off below 70%, it turns into a `/compact` nudge past
+~180k tokens; the sample line used the wrong glyphs for the bar; and the history note counted
+two context-bearing revisions where there are three.
+
+One of the reviewer's own findings was then refuted by observation: it read the duplicate-name
+path as reaching only the debug log, so a collision would be silent to `cmd mods list`. With
+both routes installed, that command printed a `Warnings (1)` section naming the losing path and
+`duplicate mod name "statusline" — first one wins`, plus `installed, but provides no mods` on the
+source. Reading the code lost to running it, and the docs now say what the command prints.
+
+## Install route: package, not drop-in (2026-10-15)
+
+Chosen so upgrades come from the repo instead of a manual copy. `cmd mods add -g
+thinhkhuat/cmd-statusline-mod` clones into `~/.commandcode/mods/.registry/git/github.com/
+thinhkhuat/cmd-statusline-mod` and records `mods.sources: ["thinhkhuat/cmd-statusline-mod"]` in
+`~/.commandcode/settings.json`; from then on `cmd mods update` pulls the pushed revision.
+
+Order of operations mattered: the package was added **before** the drop-in was retired, so the
+statusline never went dark, and only one of the two ever wins the name. The retired drop-in and
+its `statusline.ts.bak-*` files are archived at `~/_ARCHIVE/cmd-statusline-drop-in/`; the
+installed suite moved to the repo, and `install.sh` remains for anyone who wants the drop-in
+route back.
 
 **Deliberately unchanged.** The permission-mode segment is still absent until the first
 `permission_mode_changed` event: the API exposes no getter for the current mode, so seeding it
