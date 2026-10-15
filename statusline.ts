@@ -503,14 +503,15 @@ export default function (cmd: ModApi): void {
 
 		const window = usage && typeof usage.contextWindow === 'number' && usage.contextWindow > 0 ? usage.contextWindow : undefined;
 		const harnessTokens = usage && typeof usage.tokens === 'number' && usage.tokens >= 0 ? usage.tokens : undefined;
-		// The harness's own measurement wins whenever it exists; the last turn's reported usage
-		// stands in when it does not — which is every point on Command Code 1.82.3.
-		const tokens = harnessTokens ?? measuredContextTokens;
+		// Only the window is trusted from the harness getter. Its `tokens` measured unreliable in both
+		// directions on 1.82.3 — null when its tracker had stored a zero, and 1k for a 68k prompt when
+		// it had fallen back to counting the conversation alone. The measured prompt is the fill.
+		const tokens = measuredContextTokens ?? harnessTokens;
 		if (window === undefined && tokens === undefined) return undefined;
 
 		const percent =
 			tokens !== undefined && window !== undefined
-				? Math.max(0, Math.min(100, harnessTokens !== undefined && usage && typeof usage.percent === 'number' ? usage.percent : Math.round((tokens / window) * 100)))
+				? Math.max(0, Math.min(100, measuredContextTokens === undefined && harnessTokens !== undefined && usage && typeof usage.percent === 'number' ? usage.percent : Math.round((tokens / window) * 100)))
 				: null;
 
 		const percentLabel = percent === null ? '—' : `${percent}%`;

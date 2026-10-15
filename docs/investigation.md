@@ -327,6 +327,15 @@ data}` — the timestamp is stripped — so the mod now records its own `started
 and reads it back, which survives a resume. Verified by test against a persisted anchor of 42
 minutes.
 
+**A precedence that trusted the wrong side.** The context segment took `getContextUsage()` as the
+fill whenever it answered, with the measured prompt only as a stand-in. Live, that getter answered
+`null` in one session and **1k for a 68k prompt** in another — the tracker had bailed, and its
+fallback counted the conversation alone, dropping the static prefix (system prompt, tool schemas,
+skill text). The precedence is now inverted: the measured prompt is the fill, the getter supplies
+only the window, and the `percent` it pairs with its own figure is ignored when the measurement is
+what is shown. Caught by a test written before the change and proven to bite on a mutant that puts
+the harness back in front.
+
 Both were found by auditing every segment against its authoritative source rather than by reading
 the code and hoping. The same audit is what surfaces the remaining conflict: for context the two
 host surfaces disagree (see "Two context numbers" above), so parity there has no single answer.

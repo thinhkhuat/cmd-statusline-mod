@@ -267,14 +267,19 @@ describe('context segment', () => {
 		assert.doesNotMatch(t.status(), /—/, 'no em dash may survive once a turn has been measured');
 	});
 
-	it('prefers the harness measurement over the turn usage when both exist', async () => {
-		let context = {tokens: null, contextWindow: 1_000_000, percent: null};
+	it('prefers the measured prompt over the harness figure, which is unreliable both ways', async () => {
+		// Both pathologies were observed live on 1.82.3: the harness answering null (its tracker had
+		// stored a zero) and answering 1k for a 68k prompt (it had fallen back to counting the
+		// conversation alone, dropping the static prefix). So the measured prompt is the fill.
+		let context = {tokens: 1000, contextWindow: 1_000_000, percent: 0};
 		const t = await boot({context: () => context});
-		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash', usage: {inputTokens: 67_717, outputTokens: 2}});
-		assert.match(t.status(), /67\.7k/, 'the turn usage stands in while the harness reports nothing');
-		context = {tokens: 181_200, contextWindow: 1_000_000, percent: 18};
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash', usage: {inputTokens: 401_800, outputTokens: 60}});
+		assert.match(t.status(), /40% \(401\.9k\/1M\)/, 'the measured prompt is the fill');
+		assert.doesNotMatch(t.status(), /0% \(1k/, 'never the harness figure once a turn has measured');
+
+		context = {tokens: null, contextWindow: 1_000_000, percent: null};
 		await t.fire('turn_end', {});
-		assert.match(t.status(), /18% \(181\.2k\/1M\)/, 'a harness measurement wins over the turn usage');
+		assert.match(t.status(), /40% \(401\.9k\/1M\)/, 'and it stands when the harness goes silent');
 	});
 
 	it('ignores a turn usage carrying no tokens, which is not a measurement', async () => {
