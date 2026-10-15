@@ -2,3 +2,7 @@
 node_modules/
 archive/
 *.log
+
+# Harness sidecar data (taste, plans) that a hook may drop into whatever cwd it happens to run
+# from. Never mod source, so it must never be staged.
+.commandcode/
