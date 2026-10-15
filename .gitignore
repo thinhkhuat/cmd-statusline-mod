@@ -6,3 +6,6 @@ archive/
 # Harness sidecar data (taste, plans) that a hook may drop into whatever cwd it happens to run
 # from. Never mod source, so it must never be staged.
 .commandcode/
+
+# End-of-session handoffs and local notes. This repo is published; handoffs are not.
+.handoff/
