@@ -184,8 +184,9 @@ measurement, and the harness was reporting none.
 
 ### What was measured
 
-A probe mod loaded beside the real one in a real session recorded `cmd.getContextUsage()` at
-every lifecycle point. It answered
+A probe mod loaded beside the real one in a real session (`tools/probe-context.ts`; rerun it
+with `PROBE_LOG=/tmp/probe.log cmd -p --mod tools/probe-context.ts --mod statusline.ts "Reply
+with exactly: ok"`) recorded `cmd.getContextUsage()` at every lifecycle point. It answered
 
 ```
 {tokens: null, contextWindow: 1000000, percent: null}
@@ -235,6 +236,25 @@ its fill there and the old number would draw a stale bar.
 Four tests pin it, each proven to bite on its own seeded mutant: the starved getter itself, a
 `0/0` usage treated as a measurement, the precedence reversed, and the pre-compaction figure
 kept. Suite 58 → 63.
+
+### A mod's `onTurnEnd` hook fails a headless run
+
+`onTurnEnd({state, usage})` carries the same usage, so it looked like the seam to use. It is
+not: on 1.82.3, registering an `onTurnEnd` hook at all makes a headless print run die with
+
+```
+Error: Cannot read properties of undefined (reading 'messages')
+```
+
+and exit 1 — the harness's turn-end path then reads a `state` that headless never binds.
+Bisected with three throwaway probes, each run in a real session: an empty mod (exit 0), an
+events-only mod (exit 0), and a hook-only mod whose handler guards `state` throughout (exit 1).
+So it is the registration, not the handler, and it is not this mod's bug — `statusline.ts`
+registers only `onSessionStart` / `onSessionEnd` and reads the `model_request_end` event, which
+is why a plain headless run of it exits 0.
+
+`tools/probe-context.ts` therefore uses the event and no hook. A throwing mod hook fails the
+whole run, so this is worth remembering before adding one.
 
 ### Still open
 

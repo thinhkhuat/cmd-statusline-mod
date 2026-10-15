@@ -174,13 +174,14 @@ statusline.ts                     the mod — the file Command Code loads
 test/statusline.test.mjs          the suite (the drop-in route also copies it to .statusline-tests/)
 tools/probe-modapi.ts             probe used to confirm the live ModApi shape
 tools/probe-commands.ts           probe used to confirm the slash command registered
+tools/probe-context.ts            probe that recorded the starved context seam (see below)
 docs/investigation.md             root cause, the evidence trail, and the review round
 install.sh                        drop-in route: backup → copy → test → list
 archive/                          superseded revisions (gitignored)
 package.json                      manifest for the cmd mods add route
 ```
 
-Both probes print to `$PROBE_LOG` (default `/tmp/cmd-probe.log`) and are run like:
+The probes print to `$PROBE_LOG` (default `/tmp/cmd-probe.log`) and are run like:
 
 ```bash
 PROBE_LOG=/tmp/probe.log cmd -p --mod tools/probe-modapi.ts "Reply with exactly: ok"
