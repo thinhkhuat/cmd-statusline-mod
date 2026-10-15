@@ -237,6 +237,20 @@ Four tests pin it, each proven to bite on its own seeded mutant: the starved get
 `0/0` usage treated as a measurement, the precedence reversed, and the pre-compaction figure
 kept. Suite 58 → 63.
 
+### Proven live
+
+Driving the real TUI through a pty (`tools/check-live-footer.sh`) shows the same footer either
+side of one turn:
+
+```
+□□□□□□□□□□ — (—/1M) · [deepseek-v4.1-flash ◐ high] · MY-WORKBENCH ⏱ 19s
+■□□□□□□□□□ 7% (69.9k/1M) · [deepseek-v4.1-flash · high] · MY-WORKBENCH ⏱ 24s
+```
+
+The measured figure holds across every redraw after it. Before the fix, the first line was the
+only thing the segment ever drew — 63 unit tests and a clean headless run both said the mod was
+fine, which is exactly why the footer itself had to be read.
+
 ### A mod's `onTurnEnd` hook fails a headless run
 
 `onTurnEnd({state, usage})` carries the same usage, so it looked like the seam to use. It is

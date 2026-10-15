@@ -138,6 +138,7 @@ one trims it, so `120000` reads `120k` rather than `120.0k`.)
 node --test test/statusline.test.mjs     # 63 tests, no network, no real config touched
 cmd mods list                            # registered, no load warnings
 cmd -p "Reply with exactly: ok"          # loads in a session and exits cleanly (no hang)
+./tools/check-live-footer.sh             # drives the real TUI through a pty; spends one model call
 ```
 
 The suite drives the real mod file through Node's TypeScript stripping with a fake `ModApi`
@@ -175,6 +176,7 @@ test/statusline.test.mjs          the suite (the drop-in route also copies it to
 tools/probe-modapi.ts             probe used to confirm the live ModApi shape
 tools/probe-commands.ts           probe used to confirm the slash command registered
 tools/probe-context.ts            probe that recorded the starved context seam (see below)
+tools/check-live-footer.sh        drives the real TUI through a pty and reads the footer it renders
 docs/investigation.md             root cause, the evidence trail, and the review round
 install.sh                        drop-in route: backup → copy → test → list
 archive/                          superseded revisions (gitignored)
