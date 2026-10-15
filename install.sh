@@ -34,12 +34,18 @@ fi
 
 (cd "$MODS_DIR/.statusline-tests" && node --test statusline.test.mjs | tail -6)
 
-if command -v cmd >/dev/null 2>&1; then
-	cmd mods list
+if [ "$MODS_DIR" = "$HOME/.commandcode/mods" ]; then
+	if command -v cmd >/dev/null 2>&1; then
+		cmd mods list
+	else
+		echo "cmd is not on PATH — check the mod in a session with: cmd mods list"
+	fi
 else
-	echo "cmd is not on PATH — check the mod in a session with: cmd mods list"
+	echo "installed into a non-default directory, so 'cmd mods list' would report the real"
+	echo "user mods dir, not this one — inspect $MODS_DIR instead"
 fi
 
 echo
 echo "Reload a running session with /reload (mods load once per process), or start cmd fresh."
-echo "Read the footer row under the input panel: the context segment shows ■/░, a percentage and used/window."
+echo "Read the footer row under the input panel: the context segment shows a ■/□ bar, a"
+echo "percentage and (used/window), e.g.  ■■□□□□□□□□ 18% (181.2k/1M)"

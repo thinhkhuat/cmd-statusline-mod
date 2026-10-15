@@ -22,8 +22,12 @@ fabricated or proxied values" and removed the proxy — correctly, but it never 
 with the real API, which exists in the installed build.
 
 Four superseded revisions of that file are preserved in the CLI's own history store, under
-`~/.commandcode/file-history/f60299ce-ad83-4d63-8b0e-91f599b96cce/` — the two `context`-bearing
-ones are `0ff0a478…` (22:42) and `8605ad4b…` (22:49); `361995b6…` (23:32) already has none.
+`~/.commandcode/file-history/f60299ce-ad83-4d63-8b0e-91f599b96cce/`. Three of them carry the
+old `MODEL_CONTEXT` proxy table — `8673654f…` (22:39), `0ff0a478…` (22:42) and `8605ad4b…`
+(22:49) — and `361995b6…` (23:32) already has none, which places the removal between 22:49 and
+23:32. The deployed file's own mtime read `Aug 22 23:46` in `ls -la ~/.commandcode/mods` before
+the fix; that timestamp is no longer reproducible now that the file has been replaced, so it is
+recorded as an observation, not as evidence.
 
 ## The real API
 
@@ -108,16 +112,48 @@ Both failure modes are invisible on screen, which is the worst property a status
 
 ## Verification of the replacement
 
-- 49 tests (`test/statusline.test.mjs`) drive the real mod through a fake `ModApi`, asserting
-  each segment, switch, precedence layer and failure path by name.
-- Mutation check: eight seeded defects, each caught —
-  segment disabled (8 failures), seeded flag default masking the config file (4), timers left
-  referenced (hangs the run — caught by the unref assertion), flattened tones (1), non-zero
-  exit trusted (1), silent render failure (1), counters persisted per tool call (1), `null`
-  rendered as `0%` (1).
-- One seeded defect initially escaped: "non-zero exit treated as success" was invisible while
-  the only failing-command fixture had empty stdout. The suite gained
-  `does not trust output from a command that failed`, which feeds partial stdout with a
-  non-zero exit code for both `git` and `cmd skills list`; the mutant now fails.
+- 58 tests (`test/statusline.test.mjs`) drive the real mod through a fake `ModApi`, asserting
+  each segment, switch, precedence layer, failure path and repaint trigger by name.
+- Mutation check: fifteen seeded defects, each caught — see the table in `README.md`.
 - Host-level checks: `cmd mods list` lists `statusline · user` with no warning; a headless run
-  exits 0 without hanging.
+  exits 0 without hanging; `cmd.getCommands()` reports the slash command registered by
+  `mod:"statusline"`.
+
+## Independent review round (2026-10-15)
+
+A blind reviewer (no involvement in the build) was pointed at the repo with instructions to
+falsify every claim and to seed its own mutants. It ran 12 more mutants and reported 16 defects.
+What it proved, and what changed as a result:
+
+**Escaping mutants — the suite was weaker than the README said.** Four documented behaviours
+could be broken with a green board: `on`/`off` acceptance, the refresh period, the
+`compaction_done` repaint, and the context segment failing to hide. Two causes: the fake host
+failed `git` by default, so the one assertion that would have noticed a broken `on/off` had
+nothing to match; and the "hides the segment" test asserted the absence of bar glyphs rather
+than the absence of the segment. The tone test was also catching its mutant off the green
+`✓ Skills` segment instead of the bar. Fixed: the fixture now renders a git segment, the
+hiding test asserts on structure, the tone assertions anchor to `\u001b[3Nm■`, and four new
+tests cover the escapees. Re-run: all fifteen mutants now fail the suite.
+
+**Real defects fixed.**
+
+| Defect | Consequence | Fix |
+|---|---|---|
+| `capabilities.status` read only at load and session start | if the footer had not subscribed yet, git + skills never appeared and the refresh timer never started, for the whole session | `bootstrap()` latches on the first moment the flag is true — load, session start, or first run |
+| the 400 ms follow-up repaint was never cancelled | `/statusline clear` and session end were both undone 400 ms later | the handle is kept and cleared by `stopTimers()` and by the clear path |
+| a live `refreshSeconds` change did not reach the running interval | the reported new value had no effect until the next session | `restartRefreshTimer()` on that key |
+| `currentModel` cached forever | the badge kept the previous model after a `/model` switch | `config_setting_changed` resyncs both getters |
+| `formatTokens` disagreed with the host formatter while the test claimed parity | the suite asserted a false claim | reformatted to the requested style and the test renamed to state the actual rule |
+
+**Claims the reviewer refuted, corrected in these docs.** `cmd mods add --scope user` does not
+exist (it is `-g`); the duplicate-name "load warning" reaches the debug log, not `cmd mods list`;
+the stated reason for the hidden test dir was wrong (a visible subdirectory is resolved as a
+package, not scanned for loose files — the dot dir is still the documented skip); the built-in
+indicator is not simply off below 70%, it turns into a `/compact` nudge past ~180k tokens; the
+sample line used the wrong glyphs for the bar; and the history note counted two context-bearing
+revisions where there are three.
+
+**Deliberately unchanged.** The permission-mode segment is still absent until the first
+`permission_mode_changed` event: the API exposes no getter for the current mode, so seeding it
+would mean guessing. It is documented as a limit instead.
+

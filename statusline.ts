@@ -5,10 +5,10 @@
 // (`cmd.ui.widget` exists but renders nowhere, so this mod never uses it.)
 //
 // Segments — real data only, from the harness or the shell; nothing proxied:
-//   ■□□□□□□□□□ 12% · 120k/1.0M   context fill, from cmd.getContextUsage()
+//   ■■□□□□□□□□ 18% (181.2k/1M)    context fill, from cmd.getContextUsage()
 //   [fable-5 ◑ high]              model + effort + activity spinner
 //   news-tracking ⏱ 2m            project (cwd basename) + session elapsed
-//   ⚙12 ✗1 ⚡2 ↻3                 tool calls / errors / subagents / turns, this session
+//   ✗1 ⚙12 ⚡2 ↻3                 tool errors / calls / subagents / turns, this session
 //   ✓ Skills (786)                skills the harness actually loads
 //   ⎇ main ↑2↓1 +1 ~3 ?4          git branch, ahead/behind, staged/modified/untracked
 //   ⏵⏵ bypass                     permission mode
@@ -28,7 +28,7 @@
 //
 // Keys (all flags are `statusline.<key>`):
 //   showContext      boolean  true               context-fill segment
-//   contextStyle     string   'full'             full | compact | tokens
+//   contextStyle     string   'full'             full (bar + % + (used/window)) | compact (bar + %) | tokens
 //   showModel        boolean  true               model + effort + spinner
 //   showProject      boolean  true               project name + elapsed time
 //   showCounters     boolean  true               tools / errors / subagents / turns
@@ -83,7 +83,7 @@ const ALL_KEYS = [...BOOL_KEYS, ...STRING_KEYS];
 
 const FLAG_DESCRIPTIONS: Record<string, string> = {
 	showContext: 'Show the context-fill segment (harness-measured). Default true.',
-	contextStyle: 'Context segment style: full (bar + % + tokens/window), compact (bar + %), tokens (used/window). Default full.',
+	contextStyle: 'Context segment style: full (bar + % + (used/window)), compact (bar + %), tokens (used/window). Default full.',
 	showModel: 'Show the model + effort + activity segment. Default true.',
 	showProject: 'Show the project name + elapsed-time segment. Default true.',
 	showCounters: 'Show the session counters segment (tools, errors, subagents, turns). Default true.',
@@ -96,6 +96,8 @@ const FLAG_DESCRIPTIONS: Record<string, string> = {
 };
 
 const CONTEXT_BAR_CELLS = 10;
+const BAR_FILLED = '■'; // the square pair the claude-hud profile settled on
+const BAR_EMPTY = '□';
 const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
 
 interface Counters {
@@ -127,17 +129,19 @@ const ansi = {
 // ── Pure helpers ───────────────────────────────────────────────────────────────
 
 export function formatTokens(n: number): string {
-	if (n >= 1_000_000) {
-		const m = n / 1_000_000;
-		return `${Number.isInteger(m) ? m.toFixed(0) : m.toFixed(1)}M`;
-	}
-	if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+	if (n >= 1_000_000) return `${trimZero((n / 1_000_000).toFixed(1))}M`;
+	if (n >= 1_000) return `${trimZero((n / 1_000).toFixed(1))}k`;
 	return String(n);
+}
+
+// One decimal where there is one: 120k, but 181.2k and 1.1M.
+function trimZero(value: string): string {
+	return value.endsWith('.0') ? value.slice(0, -2) : value;
 }
 
 export function contextBar(percent: number | null): string {
 	const filled = percent === null ? 0 : Math.max(0, Math.min(CONTEXT_BAR_CELLS, Math.round((percent / 100) * CONTEXT_BAR_CELLS)));
-	return '█'.repeat(filled) + '░'.repeat(CONTEXT_BAR_CELLS - filled);
+	return BAR_FILLED.repeat(filled) + BAR_EMPTY.repeat(CONTEXT_BAR_CELLS - filled);
 }
 
 export function contextTone(percent: number | null): 'normal' | 'warning' | 'danger' {
@@ -307,6 +311,8 @@ export default function (cmd: ModApi): void {
 
 	let spinTimer: ReturnType<typeof setInterval> | undefined;
 	let refreshTimer: ReturnType<typeof setInterval> | undefined;
+	let followUpRepaint: ReturnType<typeof setTimeout> | undefined;
+	let bootstrapped = false; // the shell refreshes + refresh timer have started
 
 	const unref = (timer: unknown): void => {
 		(timer as {unref?: () => void}).unref?.();
@@ -343,15 +349,41 @@ export default function (cmd: ModApi): void {
 		render();
 	}
 
-	function startTimers(): void {
+	// `capabilities.status` is not "TUI vs headless" as a constant: the host flips it true
+	// when the footer subscribes. So an early false must not be final — bootstrap latches on
+	// the first moment the flag is true (load, session start, or the first run) and does the
+	// shell refreshes and starts the refresh timer exactly once. While it stays false
+	// (headless), no subprocess is spawned for a segment nobody renders.
+	function bootstrap(): void {
+		if (bootstrapped || !statusRendered()) return;
+		bootstrapped = true;
+		startRefreshTimer();
+		void refreshSkills();
+		void refreshGit();
+	}
+
+	function startRefreshTimer(): void {
 		if (refreshTimer) return;
 		const seconds = Math.max(1, Number.parseInt(stringOption('refreshSeconds'), 10) || 5);
-		if (!statusRendered()) return; // headless renders nothing: skip the shell refreshes
 		refreshTimer = setInterval(() => {
 			void refreshGit();
 			render();
 		}, seconds * 1000);
 		unref(refreshTimer);
+	}
+
+	// A live change to refreshSeconds must reach the running interval, not only the next one.
+	function restartRefreshTimer(): void {
+		if (!refreshTimer) return; // never started (headless, or not bootstrapped yet)
+		clearInterval(refreshTimer);
+		refreshTimer = undefined;
+		startRefreshTimer();
+	}
+
+	function cancelFollowUpRepaint(): void {
+		if (!followUpRepaint) return;
+		clearTimeout(followUpRepaint);
+		followUpRepaint = undefined;
 	}
 
 	function stopTimers(): void {
@@ -363,6 +395,7 @@ export default function (cmd: ModApi): void {
 			clearInterval(refreshTimer);
 			refreshTimer = undefined;
 		}
+		cancelFollowUpRepaint(); // or it repaints a status we just cleared
 		spinner = 0;
 	}
 
@@ -404,7 +437,11 @@ export default function (cmd: ModApi): void {
 
 		const style = stringOption('contextStyle');
 		const text =
-			style === 'tokens' ? pairLabel : style === 'compact' ? `${contextBar(percent)} ${percentLabel}` : `${contextBar(percent)} ${percentLabel} · ${pairLabel}`;
+			style === 'tokens'
+				? pairLabel
+				: style === 'compact'
+					? `${contextBar(percent)} ${percentLabel}`
+					: `${contextBar(percent)} ${percentLabel} (${pairLabel})`;
 
 		switch (contextTone(percent)) {
 			case 'danger':
@@ -506,12 +543,7 @@ export default function (cmd: ModApi): void {
 			sessionStart = Date.now();
 			renderBroken = false;
 			loadCounters();
-			startTimers();
-			if (statusRendered()) {
-				// Headless renders no status segment: don't spawn subprocesses for it.
-				void refreshSkills();
-				void refreshGit();
-			}
+			bootstrap();
 			render();
 		},
 		onSessionEnd: () => {
@@ -524,6 +556,7 @@ export default function (cmd: ModApi): void {
 	// ── Events ───────────────────────────────────────────────────────────────────
 	cmd.on('run_start', () => {
 		active = true;
+		bootstrap(); // the footer subscribes by now even if it had not at load time
 		render();
 	});
 	cmd.on('run_end', () => {
@@ -549,8 +582,19 @@ export default function (cmd: ModApi): void {
 		render();
 		// The harness publishes context usage just after the request settles; one short
 		// follow-up repaint keeps the row live without depending on that ordering.
-		const followUp = setTimeout(() => render(), 400);
-		unref(followUp);
+		cancelFollowUpRepaint();
+		followUpRepaint = setTimeout(() => {
+			followUpRepaint = undefined;
+			render();
+		}, 400);
+		unref(followUpRepaint);
+	});
+	cmd.on('config_setting_changed', () => {
+		// The live model can change under us (/model, /effort). The harness getters are
+		// authoritative; the event model is only a cache for the window between events.
+		currentModel = safe(() => cmd.getModel?.()) ?? '';
+		currentEffort = safe(() => cmd.getEffort?.()) ?? '';
+		render();
 	});
 	cmd.on('effort_change', event => {
 		if (event.type === 'effort_change') currentEffort = event.effort;
@@ -599,6 +643,7 @@ export default function (cmd: ModApi): void {
 		} else {
 			return `Unknown statusline option '${key}'. Run /statusline for the list.`;
 		}
+		if (key === 'refreshSeconds') restartRefreshTimer();
 		render();
 		return `statusline.${key} = ${String(liveOptions[key])}`;
 	}
@@ -621,6 +666,7 @@ export default function (cmd: ModApi): void {
 				};
 			}
 			if (input === 'clear') {
+				cancelFollowUpRepaint(); // a pending repaint would put it straight back
 				cmd.ui.setStatus(null);
 				return {message: 'Statusline cleared. It returns on the next event.'};
 			}
@@ -652,11 +698,9 @@ export default function (cmd: ModApi): void {
 
 	// ── Initial paint ────────────────────────────────────────────────────────────
 	// Factory time runs before the session binds, so this paints what does not need a
-	// session (model/effort from the harness, project, flags) right away, and kicks off
-	// both shell refreshes so a host that never fires session_start still fills them in.
-	if (statusRendered()) {
-		void refreshGit();
-		void refreshSkills();
-	}
+	// session (model/effort from the harness, project, flags) right away, and asks for the
+	// shell-backed segments. A host whose footer has not subscribed yet gets them from
+	// bootstrap() on session start or the first run.
+	bootstrap();
 	render();
 }

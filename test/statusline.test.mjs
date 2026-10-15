@@ -6,7 +6,8 @@
 //
 // It loads the real mod through Node's TypeScript stripping and drives it with a fake
 // ModApi that records everything the mod does to the host. STATUSLINE_MOD points it at a
-// mutant for mutation testing.
+// mutant for mutation testing; STATUSLINE_SCRATCH redirects the config file so the real
+// ~/.commandcode/statusline.json is never touched.
 //
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
@@ -28,7 +29,7 @@ const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
 globalThis.setInterval = (fn, ms) => {
 	const timer = realSetInterval(fn, ms);
-	const record = {timer, unref: false, cleared: false};
+	const record = {timer, ms, unref: false, cleared: false};
 	const originalUnref = timer.unref.bind(timer);
 	timer.unref = () => {
 		record.unref = true;
@@ -50,6 +51,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const settle = async (times = 4) => {
 	for (let i = 0; i < times; i += 1) await tick();
 };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const SKILLS_OUT = [' Skills  786 installed', '', 'Project (388)', '  a · x', 'Global (390)', 'Bundled (8)'].join('\n');
 
@@ -65,6 +67,7 @@ async function boot(options = {}) {
 	const entries = options.entries ?? [];
 	let model = options.model ?? 'deepseek/deepseek-v4.1-flash';
 	let effort = options.effort ?? 'high';
+	let statusRendered = options.headless !== true;
 
 	const cmd = {
 		name: 'statusline',
@@ -72,7 +75,11 @@ async function boot(options = {}) {
 		ui: {
 			setStatus: value => statuses.push(value),
 			notify: (message, level) => notifications.push({message, level}),
-			capabilities: {status: options.headless ? false : true},
+			capabilities: {
+				get status() {
+					return statusRendered;
+				},
+			},
 		},
 		addFlag: (name, spec) => {
 			flagsDeclared.set(name, spec);
@@ -119,6 +126,7 @@ async function boot(options = {}) {
 	await settle();
 
 	const status = () => (statuses.length === 0 ? '' : strip(statuses[statuses.length - 1]));
+	const raw = () => (statuses.length === 0 ? '' : statuses[statuses.length - 1]);
 	const fire = async (event, payload = {}) => {
 		for (const handler of handlers.get(event) ?? []) handler({type: event, ...payload});
 		await settle();
@@ -129,29 +137,55 @@ async function boot(options = {}) {
 		return result;
 	};
 
-	return {cmd, options, statuses, notifications, flagsDeclared, hooks, handlers, commands, appended, execCalls, status, fire, run, sessions: entries};
+	return {
+		cmd,
+		options,
+		statuses,
+		notifications,
+		flagsDeclared,
+		hooks,
+		handlers,
+		commands,
+		appended,
+		execCalls,
+		status,
+		raw,
+		fire,
+		run,
+		sessions: entries,
+		setModel: value => (model = value),
+		setEffort: value => (effort = value),
+		setStatusRendered: value => (statusRendered = value),
+	};
 }
 
 describe('context segment', () => {
-	it('renders harness-measured fill: bar, percent and tokens/window', async () => {
-		const t = await boot({context: {tokens: 120_000, contextWindow: 1_000_000, percent: 12}});
-		assert.match(t.status(), /█░{9} 12% · 120k\/1M/);
+	it('renders the measured fill as squares, percent and (used/window)', async () => {
+		const t = await boot({context: {tokens: 181_200, contextWindow: 1_000_000, percent: 18}});
+		assert.match(t.status(), /■■□□□□□□□□ 18% \(181\.2k\/1M\)/);
 	});
 
 	it('rounds the bar to the nearest cell', async () => {
 		const t = await boot({context: {tokens: 480_000, contextWindow: 1_000_000, percent: 48}});
-		assert.match(t.status(), /█{5}░{5} 48%/);
+		assert.match(t.status(), /■{5}□{5} 48%/);
 	});
 
-	it('never shows a misleading 0% before the first measurement', async () => {
+	it('shows an em dash instead of a percent before the first measurement', async () => {
 		const t = await boot({context: {tokens: null, contextWindow: 1_000_000, percent: null}});
-		assert.match(t.status(), /░{10} — · —\/1M/);
+		assert.match(t.status(), /□{10} — \(—\/1M\)/);
 		assert.doesNotMatch(t.status(), /0%/);
 	});
 
-	it('hides the segment when the harness reports nothing', async () => {
+	it('renders a measured 0% as 0%, because tokens prove there was a measurement', async () => {
+		const t = await boot({context: {tokens: 1, contextWindow: 1_000_000, percent: 0}});
+		assert.match(t.status(), /□{10} 0% \(1\/1M\)/);
+	});
+
+	it('hides the whole segment when the harness reports nothing', async () => {
 		const t = await boot({context: undefined});
-		assert.doesNotMatch(t.status(), /[█░]/);
+		const status = t.status();
+		assert.doesNotMatch(status, /[■□—]/, 'no bar and no em dash may survive when there is nothing to report');
+		assert.doesNotMatch(status, /\d+k\//, 'and no token pair');
 	});
 
 	it('hides the segment when getContextUsage throws', async () => {
@@ -160,23 +194,39 @@ describe('context segment', () => {
 				throw new Error('not bound');
 			},
 		});
-		assert.doesNotMatch(t.status(), /[█░]/);
+		assert.doesNotMatch(t.status(), /[■□]/);
 		assert.equal(t.notifications.length, 0, 'a throwing getContextUsage must not be an error notice');
 	});
 
-	it('tones green under 50, yellow at 50, red at 80', async () => {
+	it('never crashes on a hostile usage object', async () => {
+		for (const context of [
+			{},
+			{tokens: undefined, contextWindow: undefined},
+			{tokens: 120_000, contextWindow: 0},
+			{tokens: Number.NaN, contextWindow: 1_000},
+			{tokens: 120_000, contextWindow: null},
+			5,
+			'x',
+		]) {
+			const t = await boot({context});
+			assert.ok(t.status().length > 0, `status must still render for ${JSON.stringify(context)}`);
+			assert.equal(t.notifications.length, 0);
+		}
+	});
+
+	it('tones the context segment green under 50, yellow at 50, red at 80', async () => {
 		const green = await boot({context: {tokens: 490_000, contextWindow: 1_000_000, percent: 49}});
-		assert.match(green.statuses.at(-1), /\u001b\[32m/);
+		assert.match(green.raw(), /\u001b\[32m■/, 'the bar itself must carry the green');
 		const yellow = await boot({context: {tokens: 500_000, contextWindow: 1_000_000, percent: 50}});
-		assert.match(yellow.statuses.at(-1), /\u001b\[33m/);
+		assert.match(yellow.raw(), /\u001b\[33m■/, 'the bar itself must carry the yellow');
 		const red = await boot({context: {tokens: 800_000, contextWindow: 1_000_000, percent: 80}});
-		assert.match(red.statuses.at(-1), /\u001b\[31m/);
+		assert.match(red.raw(), /\u001b\[31m■/, 'the bar itself must carry the red');
 	});
 
 	it('honours contextStyle compact and tokens', async () => {
 		const compact = await boot({context: {tokens: 120_000, contextWindow: 1_000_000, percent: 12}, flags: {'statusline.contextStyle': 'compact'}});
-		assert.match(compact.status(), /12%/);
-		assert.doesNotMatch(compact.status(), /120k\/1M/);
+		assert.match(compact.status(), /■□□□□□□□□□ 12%/);
+		assert.doesNotMatch(compact.status(), /120k/);
 		const tokens = await boot({context: {tokens: 120_000, contextWindow: 1_000_000, percent: 12}, flags: {'statusline.contextStyle': 'tokens'}});
 		assert.match(tokens.status(), /120k\/1M/);
 		assert.doesNotMatch(tokens.status(), /12%/);
@@ -191,7 +241,7 @@ describe('context segment', () => {
 describe('segment switches and precedence', () => {
 	it('hides context on showContext=false', async () => {
 		const t = await boot({context: {tokens: 1, contextWindow: 100, percent: 1}, flags: {'statusline.showContext': false}});
-		assert.doesNotMatch(t.status(), /[█░]/);
+		assert.doesNotMatch(t.status(), /[■□]/);
 	});
 
 	it('declares every flag without a default, so getFlag stays undefined until set', async () => {
@@ -205,16 +255,16 @@ describe('segment switches and precedence', () => {
 		writeFileSync(CONFIG, JSON.stringify({showContext: false, label: 'file'}));
 
 		const fromFile = await boot({context: {tokens: 1, contextWindow: 100, percent: 1}});
-		assert.doesNotMatch(fromFile.status(), /[█░]/, 'config file must override the default');
+		assert.doesNotMatch(fromFile.status(), /[■□]/, 'config file must override the default');
 		assert.match(fromFile.status(), /file/);
 
 		const fromFlag = await boot({context: {tokens: 1, contextWindow: 100, percent: 1}, flags: {'statusline.showContext': true, 'statusline.label': 'flag'}});
-		assert.match(fromFlag.status(), /[█░]/, 'a launch flag must beat the file');
+		assert.match(fromFlag.status(), /[■□]/, 'a launch flag must beat the file');
 		assert.match(fromFlag.status(), /flag/);
 
 		const fromSession = await boot({context: {tokens: 1, contextWindow: 100, percent: 1}, flags: {'statusline.showContext': true}});
 		await fromSession.run('statusline', 'showContext=false');
-		assert.doesNotMatch(fromSession.status(), /[█░]/, 'a live override must beat the launch flag');
+		assert.doesNotMatch(fromSession.status(), /[■□]/, 'a live override must beat the launch flag');
 
 		rmSync(CONFIG, {force: true});
 	});
@@ -237,6 +287,16 @@ describe('segment switches and precedence', () => {
 	it('hides the counters segment when there is nothing to count', async () => {
 		const t = await boot({});
 		assert.doesNotMatch(t.status(), /[⚙✗↻⚡]/);
+	});
+
+	it('turns each segment off and on again through /statusline, including the git segment', async () => {
+		const t = await boot({git: '## main\n'});
+		assert.match(t.status(), /⎇ main/);
+		const off = await t.run('statusline', 'showGit=off');
+		assert.match(off.message, /statusline\.showGit = false/);
+		assert.doesNotMatch(t.status(), /⎇/, 'showGit=off must remove a segment that is actually there');
+		await t.run('statusline', 'showGit=on');
+		assert.match(t.status(), /⎇ main/, 'showGit=on must bring it back');
 	});
 });
 
@@ -387,6 +447,16 @@ describe('model + activity', () => {
 		assert.match(t.status(), /GLM-5\.3 · ultra/);
 	});
 
+	it('resyncs to the harness when the session config changes the model', async () => {
+		const t = await boot({});
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash', effort: 'high'});
+		assert.match(t.status(), /deepseek-v4\.1-flash/);
+		t.setModel('zai-org/GLM-5.3');
+		t.setEffort('low');
+		await t.fire('config_setting_changed');
+		assert.match(t.status(), /\[GLM-5\.3 · low\]/, 'a model switch must not leave the old badge on screen');
+	});
+
 	it('marks the run active and generating', async () => {
 		const t = await boot({});
 		await t.fire('run_start');
@@ -397,6 +467,17 @@ describe('model + activity', () => {
 		assert.match(t.status(), /\[deepseek-v4\.1-flash ○ high\]/);
 		await t.fire('run_end');
 		assert.match(t.status(), /\[deepseek-v4\.1-flash · high\]/);
+	});
+});
+
+describe('repaint triggers', () => {
+	it('repaints the context after a compaction resets it', async () => {
+		const t = await boot({context: {tokens: 500_000, contextWindow: 1_000_000, percent: 50}});
+		assert.match(t.status(), /50%/);
+		// What the harness wrapper returns once a compaction has zeroed the fill.
+		t.cmd.getContextUsage = () => ({tokens: null, contextWindow: 1_000_000, percent: null});
+		await t.fire('compaction_done');
+		assert.match(t.status(), /□{10} — \(—\/1M\)/, 'a compaction must not leave the pre-compaction percentage on screen');
 	});
 });
 
@@ -419,10 +500,51 @@ describe('robustness', () => {
 	});
 
 	it('spawns no subprocess when the host renders no status', async () => {
+		intervals.length = 0; // other tests' timers must not leak into this one
 		const t = await boot({headless: true});
 		t.hooks.onSessionStart({source: 'startup'});
 		await settle();
 		assert.deepEqual(t.execCalls, []);
+		assert.deepEqual(intervals.filter(r => r.ms === 5000), []);
+	});
+
+	it('bootstraps the shell refreshes when the status capability turns true later', async () => {
+		intervals.length = 0;
+		const t = await boot({headless: true, git: '## main\n'});
+		await settle();
+		assert.deepEqual(t.execCalls, [], 'nothing rendered yet: no subprocesses');
+		t.setStatusRendered(true);
+		await t.fire('run_start');
+		assert.ok(t.execCalls.some(c => c.command === 'git'), 'git must be fetched once the footer renders');
+		assert.ok(t.execCalls.some(c => c.command === 'cmd'), 'the skills count must be fetched too');
+		assert.ok(intervals.some(r => r.ms === 5000), 'the refresh timer must start once the footer renders');
+	});
+
+	it('reconfigures the running refresh interval when refreshSeconds changes live', async () => {
+		intervals.length = 0;
+		const t = await boot({flags: {'statusline.refreshSeconds': '1'}});
+		assert.deepEqual(intervals.map(r => r.ms), [1000]);
+		await t.run('statusline', 'refreshSeconds=10');
+		assert.deepEqual(intervals.map(r => r.ms), [1000, 10_000], 'the live change must reach the running interval');
+		assert.equal(intervals[0].cleared, true);
+	});
+
+	it('does not let a pending repaint resurrect a cleared status', async () => {
+		const t = await boot({});
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash'}); // schedules one
+		await t.run('statusline', 'clear');
+		assert.equal(t.statuses.at(-1), null);
+		await sleep(500);
+		assert.equal(t.statuses.at(-1), null, 'a cleared status must stay cleared');
+	});
+
+	it('does not repaint after session end', async () => {
+		const t = await boot({});
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash'});
+		t.hooks.onSessionEnd({reason: 'shutdown'});
+		assert.equal(t.statuses.at(-1), null);
+		await sleep(500);
+		assert.equal(t.statuses.at(-1), null, 'the segment must stay clear after the session is gone');
 	});
 
 	it('does not trust output from a command that failed', async () => {
@@ -447,6 +569,15 @@ describe('robustness', () => {
 		t.hooks.onSessionStart({source: 'startup'});
 		await t.fire('turn_end');
 		assert.match(t.status(), /↻1/);
+	});
+
+	it('survives a host with no model or effort getters', async () => {
+		const t = await boot({});
+		delete t.cmd.getModel;
+		delete t.cmd.getEffort;
+		await t.fire('model_request_end', {model: 'm'});
+		await t.fire('config_setting_changed');
+		assert.ok(t.status().length > 0);
 	});
 
 	it('notices a broken render once instead of thrashing the host', async () => {
@@ -490,14 +621,6 @@ describe('command surface', () => {
 		assert.match((await t.run('statusline', 'contextStyle=sparkly')).message, /must be full, compact or tokens/);
 	});
 
-	it('accepts on/off and key=value and bare-value forms', async () => {
-		const t = await boot({});
-		await t.run('statusline', 'showGit=off');
-		assert.doesNotMatch(t.status(), /⎇/);
-		await t.run('statusline', 'label mine');
-		assert.match(t.status(), /mine/);
-	});
-
 	it('saves to the config file and resets it', async () => {
 		rmSync(CONFIG, {force: true});
 		const t = await boot({});
@@ -507,12 +630,12 @@ describe('command surface', () => {
 		assert.equal(JSON.parse(readFileSync(CONFIG, 'utf8')).showContext, false);
 
 		const relaunched = await boot({context: {tokens: 1, contextWindow: 100, percent: 1}});
-		assert.doesNotMatch(relaunched.status(), /[█░]/, 'the saved file must apply to the next launch');
+		assert.doesNotMatch(relaunched.status(), /[■□]/, 'the saved file must apply to the next launch');
 
 		await relaunched.run('statusline', 'reset');
 		assert.equal(existsSync(CONFIG), false);
 		const cleared = await boot({context: {tokens: 1, contextWindow: 100, percent: 1}});
-		assert.match(cleared.status(), /[█░]/, 'reset must return to defaults');
+		assert.match(cleared.status(), /[■□]/, 'reset must return to defaults');
 	});
 
 	it('clears the segment on /statusline clear', async () => {
@@ -523,20 +646,22 @@ describe('command surface', () => {
 });
 
 describe('pure helpers', () => {
-	it('formats tokens the way the host does', () => {
+	it('formats tokens in the host context-view style, minus a trailing .0', () => {
 		assert.equal(formatTokens(999), '999');
-		assert.equal(formatTokens(1_200), '1k');
+		assert.equal(formatTokens(1200), '1.2k');
 		assert.equal(formatTokens(120_000), '120k');
+		assert.equal(formatTokens(181_200), '181.2k');
+		assert.equal(formatTokens(999_900), '999.9k');
 		assert.equal(formatTokens(1_000_000), '1M');
 		assert.equal(formatTokens(1_050_000), '1.1M');
 	});
 
 	it('clamps the bar at the edges', () => {
-		assert.equal(contextBar(null), '░'.repeat(10));
-		assert.equal(contextBar(0), '░'.repeat(10));
-		assert.equal(contextBar(100), '█'.repeat(10));
-		assert.equal(contextBar(250), '█'.repeat(10));
-		assert.equal(contextBar(-5), '░'.repeat(10));
+		assert.equal(contextBar(null), '□'.repeat(10));
+		assert.equal(contextBar(0), '□'.repeat(10));
+		assert.equal(contextBar(100), '■'.repeat(10));
+		assert.equal(contextBar(250), '■'.repeat(10));
+		assert.equal(contextBar(-5), '□'.repeat(10));
 	});
 
 	it('bins the tone like the host does', () => {
