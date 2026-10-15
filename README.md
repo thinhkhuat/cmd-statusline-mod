@@ -122,10 +122,17 @@ persisted per tool call, `null` rendered as `0%`) fail the suite.
 statusline.ts                     the mod — the file Command Code loads
 test/statusline.test.mjs          the suite (also installed to .statusline-tests/)
 tools/probe-modapi.ts             probe used to confirm the live ModApi shape
+tools/probe-commands.ts           probe used to confirm the slash command registered
 docs/investigation.md             root cause and the evidence trail
 install.sh                        backup → copy → test → list
 archive/                          superseded revisions (gitignored)
 package.json                      manifest for the cmd mods add route
+```
+
+Both probes print to `$PROBE_LOG` (default `/tmp/cmd-probe.log`) and are run like:
+
+```bash
+PROBE_LOG=/tmp/probe.log cmd -p --mod tools/probe-modapi.ts "Reply with exactly: ok"
 ```
 
 `statusline.ts` here is the **source of truth**; `~/.commandcode/mods/statusline.ts` is the

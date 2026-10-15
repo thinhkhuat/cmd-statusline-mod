@@ -70,6 +70,27 @@ measurement — which is exactly the case the segment must render as `—`, not 
 Also visible in the same run: `cmd.getModel()` / `cmd.getEffort()` report the live session
 values, which is why the mod no longer reads `~/.commandcode/config.json` to seed them.
 
+## Proof the `/statusline` command registered
+
+`cmd.getCommands()` returns every slash command mods registered on the host. A second probe
+(`tools/probe-commands.ts`) logged it in a real headless run:
+
+```
+commands {"total":5,"mods":["acp","herdr","mnemosyne-bridge","peek","statusline"],
+          "statusline":[{"name":"statusline",
+                         "description":"Configure the statusline (segments, style, label, save/reset/clear)",
+                         "mod":"statusline"}]}
+```
+
+So the command is registered by this mod on a live host, and no built-in shadows the name
+(grepping the CLI bundle for `statusline` finds only internal helpers — `statusLinePath`,
+`meaningfulStatusLines` — never a command registration).
+
+A note on method: `cmd -p "/statusline"` prints the *model's answer*, not the command's
+output — print mode does not dispatch slash commands, and the model cannot see mod-registered
+commands, so it will confidently deny that `/statusline` exists. Use `cmd.getCommands()` to
+check registration, and the interactive TUI to exercise it.
+
 ## Rival explanation, checked and kept
 
 Command Code's **built-in** context indicator is gated: `projectContextIndicator` returns
