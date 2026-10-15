@@ -1,0 +1,21 @@
+{
+	"name": "cmd-statusline-mod",
+	"version": "1.0.0",
+	"description": "A configurable Command Code statusline: live context-window usage, model + effort, project, session counters, skills, git and permission mode.",
+	"keywords": [
+		"cmd-mod",
+		"cmd-mod-flag",
+		"cmd-mod-command",
+		"command-code",
+		"statusline"
+	],
+	"commandcode": {
+		"mods": [
+			"./statusline.ts"
+		]
+	},
+	"scripts": {
+		"test": "node --test test/statusline.test.mjs"
+	},
+	"private": true
+}
