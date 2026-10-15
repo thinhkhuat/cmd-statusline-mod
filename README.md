@@ -168,10 +168,22 @@ agentic context. The segment instead shows the provider's own count of the promp
 `usage.inputTokens` the harness's compaction gate is itself computed from), so it is the number tied to
 the model's real window.
 
+## Parity
+
+Every value that has a harness getter is **read at render, never cached** — `getModel()`,
+`getEffort()`, `getContextUsage()` — so a `/model` or `/effort` switch shows on the next repaint and
+nothing can go stale behind an event. The harness getters are what the host's own UI shows. A
+`model_request_end` event is *not* a source of truth: calls belonging to another model (a title or a
+summary call) fire it too, and one of those must neither rename the badge nor set the context fill.
+
+The elapsed time is anchored to the session, not to this process — the counters entry persists a
+`startedAt`, because the harness strips a custom entry's timestamp on the way out and a resumed
+session would otherwise restart the clock at whatever moment the process bound.
+
 ## Verify
 
 ```bash
-node --test test/statusline.test.mjs     # 74 tests, no network, no real config touched
+node --test test/statusline.test.mjs     # 79 tests, no network, no real config touched
 node tools/check-contrast.mjs            # the palette against 811 real themes; no network
 cmd mods list                            # registered, no load warnings
 cmd -p "Reply with exactly: ok"          # loads in a session and exits cleanly (no hang)
@@ -179,7 +191,7 @@ cmd -p "Reply with exactly: ok"          # loads in a session and exits cleanly 
 ```
 
 The suite drives the real mod file through Node's TypeScript stripping with a fake `ModApi`
-that records every call the mod makes to the host: 74 cases covering each segment, the
+that records every call the mod makes to the host: 79 cases covering each segment, the
 switch and precedence layers, the failure paths and the repaint triggers. `STATUSLINE_MOD=<path>`
 points it at a mutant for mutation testing. Nineteen seeded defects were each caught:
 

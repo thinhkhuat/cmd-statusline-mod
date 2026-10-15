@@ -61,7 +61,7 @@
 //
 // Verify: `cmd mods list` (registered, no warnings) · `cmd --mod <file> -p "hi"` (loads,
 // exits) · `cmd` then /reload, and read the footer row under the input.
-// Test: node --test .statusline-tests/statusline.test.mjs   (74 tests, from this directory)
+// Test: node --test .statusline-tests/statusline.test.mjs   (79 tests, from this directory)
 
 import type {ModApi} from '@commandcode/harness';
 import {mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync} from 'node:fs';
@@ -372,8 +372,8 @@ export default function (cmd: ModApi): void {
 	}
 
 	// ── Run-scoped state ─────────────────────────────────────────────────────────
-	let currentModel = '';
-	let currentEffort = '';
+	// Model and effort are deliberately NOT cached: the getters are what the harness's own UI shows,
+	// and a cached copy is exactly what goes stale when either is switched mid-session.
 	let active = false;
 	let busy = false;
 	let spinner = 0;
@@ -535,8 +535,10 @@ export default function (cmd: ModApi): void {
 	}
 
 	function modelSegment(): string {
-		const model = currentModel || safe(() => cmd.getModel?.()) || '';
-		const effort = currentEffort || safe(() => cmd.getEffort?.()) || '';
+		// Read the getters on every render, never a cache: they are the harness's own truth about
+		// what this session is running, and they move the moment the model or effort is switched.
+		const model = safe(() => cmd.getModel?.()) ?? '';
+		const effort = safe(() => cmd.getEffort?.()) ?? '';
 		const name = model.split('/').pop() || '…';
 		const dot = busy ? SPINNER_FRAMES[spinner] : active ? '○' : '·';
 		return paint('model', `[${name} ${dot}${effort ? ` ${effort}` : ''}]`);
@@ -597,9 +599,16 @@ export default function (cmd: ModApi): void {
 	}
 
 	// ── Durable counters ─────────────────────────────────────────────────────────
+	// The payload carries the session's own anchor (`startedAt`): the harness strips the timestamp
+	// off a custom entry on the way out, so without it a resumed session would restart the elapsed
+	// clock at whatever moment this process happened to bind.
+	const counterPayload = (): Record<string, unknown> => ({...counters, startedAt: sessionStart});
+
 	function loadCounters(): void {
 		const entries = safe(() => cmd.session?.getCustomEntries({customType: CUSTOM_TYPE})) ?? [];
-		const data = entries[entries.length - 1]?.data as Partial<Counters> | undefined;
+		const data = entries[entries.length - 1]?.data as (Partial<Counters> & {startedAt?: number}) | undefined;
+		const started = Number(data?.startedAt);
+		if (Number.isFinite(started) && started > 0) sessionStart = started; // the session's span, not this process's
 		counters = data
 			? {
 					turns: Number(data.turns) || 0,
@@ -608,13 +617,14 @@ export default function (cmd: ModApi): void {
 					subagents: Number(data.subagents) || 0,
 				}
 			: {...EMPTY_COUNTERS};
-		lastPersistedCounters = JSON.stringify(counters);
+		lastPersistedCounters = JSON.stringify(counterPayload());
 	}
 
 	function persistCounters(): void {
-		const snapshot = JSON.stringify(counters);
+		const payload = counterPayload();
+		const snapshot = JSON.stringify(payload);
 		if (snapshot === lastPersistedCounters) return;
-		safe(() => cmd.session?.appendCustomEntry({customType: CUSTOM_TYPE, data: counters}));
+		safe(() => cmd.session?.appendCustomEntry({customType: CUSTOM_TYPE, data: payload}));
 		lastPersistedCounters = snapshot;
 	}
 
@@ -647,19 +657,23 @@ export default function (cmd: ModApi): void {
 		persistCounters();
 		render();
 	});
-	cmd.on('model_request_start', event => {
-		if (event.type === 'model_request_start') currentModel = event.model;
+	cmd.on('model_request_start', () => {
 		busy = true;
 		startSpin();
 		render();
 	});
 	cmd.on('model_request_end', event => {
 		if (event.type === 'model_request_end') {
-			currentModel = event.model;
-			if (event.effort) currentEffort = event.effort;
-			// The turn's real usage, kept only until the harness reports a measurement of its own.
-			const measured = contextTokensFromUsage((event as unknown as {usage?: unknown}).usage);
-			if (measured !== undefined) measuredContextTokens = measured;
+			// The harness getters are the truth about what this session is running, so nothing here
+			// writes the badge. A call belonging to another model — a title or summary call — says
+			// nothing about this conversation, so it cannot set the fill either.
+			const sessionModel = safe(() => cmd.getModel?.());
+			const ownCall = !event.model || !sessionModel || event.model === sessionModel;
+			if (ownCall) {
+				// The turn's real usage, kept only until the harness reports a measurement of its own.
+				const measured = contextTokensFromUsage((event as unknown as {usage?: unknown}).usage);
+				if (measured !== undefined) measuredContextTokens = measured;
+			}
 		}
 		busy = false;
 		stopSpin();
@@ -673,17 +687,8 @@ export default function (cmd: ModApi): void {
 		}, 400);
 		unref(followUpRepaint);
 	});
-	cmd.on('config_setting_changed', () => {
-		// The live model can change under us (/model, /effort). The harness getters are
-		// authoritative; the event model is only a cache for the window between events.
-		currentModel = safe(() => cmd.getModel?.()) ?? '';
-		currentEffort = safe(() => cmd.getEffort?.()) ?? '';
-		render();
-	});
-	cmd.on('effort_change', event => {
-		if (event.type === 'effort_change') currentEffort = event.effort;
-		render();
-	});
+	cmd.on('config_setting_changed', () => render()); // /model, /effort, and anything else live
+	cmd.on('effort_change', () => render());
 	cmd.on('permission_mode_changed', event => {
 		if (event.type === 'permission_mode_changed') permissionMode = event.mode;
 		render();

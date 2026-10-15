@@ -307,6 +307,30 @@ it, so the headers summed to **792** while only **399** names were distinct. The
 headers — 399 on this machine — and falls back to the header sum only when no names are listed.
 Restored agreement is the evidence: the segment and the panel now print the same number.
 
+## Parity: the getters are truth, and nothing is cached (2026-10-15, live)
+
+The user's demand, after the skills defect: every displayed value must be correct, in parity with
+what Command Code itself shows, and live-updated — switching model A to B must switch the badge,
+and no value may be a stale copy. Two defects came out of taking that seriously.
+
+**A cached model and effort.** The badge kept `currentModel` / `currentEffort` as a cache that only
+refreshed on `config_setting_changed`. Nothing about that is live, and one existing test even
+asserted the wrong contract — *"prefers the live event model over the harness getter"* — which is
+exactly the assumption that breaks, because a `model_request_end` event also fires for calls by
+**other** models (a title or summary call), and such a call must neither rename the badge nor set
+the context fill. The segment now reads `getModel()` / `getEffort()` on every render and caches
+nothing, and a call whose model is not this session's model is ignored for the fill.
+
+**A process-scoped clock.** The elapsed time was anchored to when the mod bound the session, so a
+resumed session restarted the clock. `getCustomEntries` projects entries to `{id, customType,
+data}` — the timestamp is stripped — so the mod now records its own `startedAt` inside the payload
+and reads it back, which survives a resume. Verified by test against a persisted anchor of 42
+minutes.
+
+Both were found by auditing every segment against its authoritative source rather than by reading
+the code and hoping. The same audit is what surfaces the remaining conflict: for context the two
+host surfaces disagree (see "Two context numbers" above), so parity there has no single answer.
+
 ## Colour: what a statusline can and cannot guarantee (2026-10-15)
 
 Every section wore `dim` (ANSI 2) except the context bar. The ask was to colour the row by section

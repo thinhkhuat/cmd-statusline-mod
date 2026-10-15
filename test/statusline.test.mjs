@@ -270,7 +270,7 @@ describe('context segment', () => {
 	it('prefers the harness measurement over the turn usage when both exist', async () => {
 		let context = {tokens: null, contextWindow: 1_000_000, percent: null};
 		const t = await boot({context: () => context});
-		await t.fire('model_request_end', {model: 'm', usage: {inputTokens: 67_717, outputTokens: 2}});
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash', usage: {inputTokens: 67_717, outputTokens: 2}});
 		assert.match(t.status(), /67\.7k/, 'the turn usage stands in while the harness reports nothing');
 		context = {tokens: 181_200, contextWindow: 1_000_000, percent: 18};
 		await t.fire('turn_end', {});
@@ -279,17 +279,52 @@ describe('context segment', () => {
 
 	it('ignores a turn usage carrying no tokens, which is not a measurement', async () => {
 		const t = await boot({context: {tokens: null, contextWindow: 1_000_000, percent: null}});
-		await t.fire('model_request_end', {model: 'm', usage: {inputTokens: 0, outputTokens: 0}});
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash', usage: {inputTokens: 0, outputTokens: 0}});
 		assert.match(t.status(), /— \(—\/1M\)/);
 		assert.doesNotMatch(t.status(), /0%/, 'an empty usage must never read as 0%');
 	});
 
 	it('drops the stale figure when a compaction resets the fill', async () => {
 		const t = await boot({context: {tokens: null, contextWindow: 1_000_000, percent: null}});
-		await t.fire('model_request_end', {model: 'm', usage: {inputTokens: 900_000, outputTokens: 100}});
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash', usage: {inputTokens: 900_000, outputTokens: 100}});
 		assert.match(t.status(), /90% \(900\.1k\/1M\)/);
 		await t.fire('compaction_done', {});
 		assert.match(t.status(), /— \(—\/1M\)/, 'a figure measured before a compaction is stale and must not survive it');
+	});
+
+	it('takes the context figure only from the session model\'s own call', async () => {
+		const t = await boot({context: {tokens: null, contextWindow: 1_000_000, percent: null}});
+		await t.fire('model_request_end', {model: 'xiaomi/mimo-v2.6-pro', usage: {inputTokens: 900, outputTokens: 4}});
+		assert.match(t.status(), /— \(—\/1M\)/, 'a call that is not this session\'s model must not set the fill');
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash', usage: {inputTokens: 401_800, outputTokens: 60}});
+		assert.match(t.status(), /40% \(401\.9k\/1M\)/, 'this session\'s own call does set it');
+	});
+
+	it('keeps the model badge on the session model when another model answers', async () => {
+		const t = await boot({});
+		await t.fire('model_request_end', {model: 'xiaomi/mimo-v2.6-pro', usage: {inputTokens: 900}});
+		assert.match(t.status(), /\[deepseek-v4\.1-flash · high\]/, 'an auxiliary call must not rename the badge');
+	});
+
+	it('follows a live model switch', async () => {
+		const t = await boot({});
+		assert.match(t.status(), /\[deepseek-v4\.1-flash · high\]/);
+		t.setModel('moonshotai/Kimi-K3');
+		await t.fire('config_setting_changed', {setting: 'model'});
+		assert.match(t.status(), /\[Kimi-K3 · high\]/, 'the badge must switch with the session');
+	});
+
+	it('follows a live effort change', async () => {
+		const t = await boot({});
+		t.setEffort('low');
+		await t.fire('effort_change', {effort: 'low'});
+		assert.match(t.status(), /· low\]/, 'the effort in the badge must switch with the session');
+	});
+
+	it('measures the session, not this process, so a resume keeps the elapsed span', async () => {
+		const startedAt = Date.now() - 42 * 60 * 1000;
+		const t = await boot({entries: [{id: 'e1', customType: 'statusline/counters', data: {turns: 12, tools: 30, toolErrors: 0, subagents: 0, startedAt}}]});
+		assert.match(t.status(), /⏱ 42m/, 'elapsed comes from the session\'s first recorded turn, not from when this process bound it');
 	});
 });
 
@@ -502,13 +537,17 @@ describe('model + activity', () => {
 		assert.match(t.status(), /\[deepseek-v4\.1-flash · high\]/);
 	});
 
-	it('prefers the live event model over the harness getter', async () => {
+	it('takes the model and effort from the harness getters, not from an event', async () => {
 		const t = await boot({});
+		// A call by some other model must not rename the badge: the getters say what this session runs.
 		await t.fire('model_request_end', {model: 'zai-org/GLM-5.3', effort: 'low'});
-		assert.match(t.status(), /\[GLM-5\.3 · low\]/);
+		assert.match(t.status(), /\[deepseek-v4\.1-flash · high\]/);
 
-		await t.fire('effort_change', {effort: 'ultra'});
-		assert.match(t.status(), /GLM-5\.3 · ultra/);
+		// A real switch moves the getters, and the badge follows it.
+		t.setModel('zai-org/GLM-5.3');
+		t.setEffort('low');
+		await t.fire('effort_change', {effort: 'low'});
+		assert.match(t.status(), /GLM-5\.3 · low/);
 	});
 
 	it('resyncs to the harness when the session config changes the model', async () => {
