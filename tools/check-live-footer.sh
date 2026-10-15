@@ -99,7 +99,9 @@ fi
 echo
 
 fill=1
-if ! grep -qE '■+□* [0-9]+% \([0-9.]+[kM]?/[0-9.]+[kM]?\)' "$plainfile"; then
+# Any bar plus a percentage plus a token pair counts, including a measured `0% (1k/1M)`: the bug
+# this guards is the em dash, not a small number.
+if ! grep -qE '[■□]{10} [0-9]+% \([0-9.]+[kM]?/[0-9.]+[kM]?\)' "$plainfile"; then
 	fill=0
 	if grep -qaE '[◐◓◑◒]|↻' "$raw"; then
 		echo 'FAIL: a turn ran, and the footer never drew a measured context fill'

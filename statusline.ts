@@ -61,7 +61,7 @@
 //
 // Verify: `cmd mods list` (registered, no warnings) · `cmd --mod <file> -p "hi"` (loads,
 // exits) · `cmd` then /reload, and read the footer row under the input.
-// Test: node --test .statusline-tests/statusline.test.mjs   (79 tests, from this directory)
+// Test: node --test .statusline-tests/statusline.test.mjs   (80 tests, from this directory)
 
 import type {ModApi} from '@commandcode/harness';
 import {mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync} from 'node:fs';
@@ -534,12 +534,13 @@ export default function (cmd: ModApi): void {
 		}
 	}
 
-	function modelSegment(): string {
+	function modelSegment(): string | undefined {
 		// Read the getters on every render, never a cache: they are the harness's own truth about
 		// what this session is running, and they move the moment the model or effort is switched.
 		const model = safe(() => cmd.getModel?.()) ?? '';
 		const effort = safe(() => cmd.getEffort?.()) ?? '';
-		const name = model.split('/').pop() || '…';
+		if (!model) return undefined; // nothing invented while the getter is silent
+		const name = model.split('/').pop() || model;
 		const dot = busy ? SPINNER_FRAMES[spinner] : active ? '○' : '·';
 		return paint('model', `[${name} ${dot}${effort ? ` ${effort}` : ''}]`);
 	}
@@ -576,7 +577,8 @@ export default function (cmd: ModApi): void {
 				const context = contextSegment();
 				if (context) parts.push(context);
 			}
-			if (boolOption('showModel')) parts.push(modelSegment());
+			const badge = boolOption('showModel') ? modelSegment() : undefined;
+			if (badge) parts.push(badge);
 			if (boolOption('showProject')) parts.push(paint('project', `${basename(cmd.cwd) || '…'} ⏱ ${elapsedLabel(Date.now() - sessionStart)}`));
 			if (boolOption('showCounters')) {
 				const segment = countersSegment();

@@ -183,15 +183,16 @@ session would otherwise restart the clock at whatever moment the process bound.
 ## Verify
 
 ```bash
-node --test test/statusline.test.mjs     # 79 tests, no network, no real config touched
+node --test test/statusline.test.mjs     # 80 tests, no network, no real config touched
 node tools/check-contrast.mjs            # the palette against 811 real themes; no network
 cmd mods list                            # registered, no load warnings
 cmd -p "Reply with exactly: ok"          # loads in a session and exits cleanly (no hang)
 ./tools/check-live-footer.sh             # drives the real TUI through a pty; spends one model call
+./tools/check-live-parity.sh             # switches model+effort mid-session; two model calls
 ```
 
 The suite drives the real mod file through Node's TypeScript stripping with a fake `ModApi`
-that records every call the mod makes to the host: 79 cases covering each segment, the
+that records every call the mod makes to the host: 80 cases covering each segment, the
 switch and precedence layers, the failure paths and the repaint triggers. `STATUSLINE_MOD=<path>`
 points it at a mutant for mutation testing. Nineteen seeded defects were each caught:
 
@@ -232,6 +233,9 @@ tools/probe-modapi.ts             probe used to confirm the live ModApi shape
 tools/probe-commands.ts           probe used to confirm the slash command registered
 tools/probe-context.ts            probe that recorded the starved context seam (see below)
 tools/check-live-footer.sh        drives the real TUI through a pty and reads the footer it renders
+tools/check-live-parity.sh        drives a TUI, switches model and effort mid-session, diffs the row
+tools/parity-report.mjs           compares that capture against the probe log, field by field
+tools/probe-parity.ts             the probe that switches, and records the harness getters
 tools/check-contrast.mjs          scores the colour palette against real terminal themes
 tools/palettes.json               811 terminal themes (MIT) that the contrast check reads
 docs/investigation.md             root cause, the evidence trail, and the review round

@@ -550,6 +550,14 @@ describe('model + activity', () => {
 		assert.match(t.status(), /GLM-5\.3 · low/);
 	});
 
+	it('hides the badge until the harness reports a model, instead of inventing a placeholder', async () => {
+		const t = await boot({model: ''});
+		assert.doesNotMatch(t.status(), /\[…/, 'no placeholder while the getter is silent');
+		t.setModel('deepseek/deepseek-v4.1-flash');
+		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash'});
+		assert.match(t.status(), /\[deepseek-v4\.1-flash/, 'and it appears as soon as there is one');
+	});
+
 	it('resyncs to the harness when the session config changes the model', async () => {
 		const t = await boot({});
 		await t.fire('model_request_end', {model: 'deepseek/deepseek-v4.1-flash', effort: 'high'});
