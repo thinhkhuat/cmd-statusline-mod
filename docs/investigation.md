@@ -278,3 +278,30 @@ fallback for when no provider measurement exists. If `/context` shows real numbe
 seam answers `null`, then the seam — not the measurement — is the defect to report upstream, and
 this stand-in can retire.
 
+## Colour: what a statusline can and cannot guarantee (2026-10-15)
+
+Every section wore `dim` (ANSI 2) except the context bar. The ask was to colour the row by section
+and follow WCAG, which turns a matter of taste into a measurement.
+
+`tools/check-contrast.mjs` scores candidate slots against **811 real terminal themes**
+(`tools/palettes.json`, from the iTerm2-Color-Schemes windowsterminal port, MIT). Two facts came
+out of it, and both shaped the design:
+
+- **No set of distinct ANSI hues clears WCAG 1.4.3's 4.5:1 on every theme.** Best on a dark
+  background: white 96%, yellow 94%, cyan 90%. Best on a light background: black 77%, blue 69%,
+  purple 69%. The two sets are disjoint, so any slot chosen for one mode is a gamble on the other.
+  A hardcoded RGB is worse still: it holds one mode and breaks the other outright.
+- **The most balanced slots are blue (72% dark / 69% light), purple (73/69) and red (65/68).**
+  So the two identity sections take blue and purple, and everywhere else the palette maximises the
+  weaker mode.
+
+Design rules that follow: theme-defined slots only; no `dim`/faint (ANSI 2) and no `brightBlack`,
+both of which spend the contrast headroom the theme provided; and colour is never the only cue,
+since every section keeps its own glyph and words (SC 1.4.1).
+
+The residual is stated rather than hidden: on a light-background theme four of the seven slots fall
+under 4.5:1 in more than half of themes, and that is the theme's palette to fix. The checker gates
+the four properties that are ours — no faint slot, every slot above 3:1 on half of each mode,
+balanced identity slots, and the host's own state thresholds — and each gate was proven to bite on
+its own mutant.
+

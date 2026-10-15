@@ -725,6 +725,71 @@ describe('pure helpers', () => {
 	});
 });
 
+// Colours: one hue per section, every slot a theme-defined ANSI colour so the terminal's own
+// palette carries dark/light adaptation. `dim`/faint is gone — see tools/check-contrast.mjs for
+// the measured reason and the remaining limit.
+describe('segment colours', () => {
+	it('uses no faint text anywhere in the row', async () => {
+		const t = await boot({git: '## main\n', context: {tokens: 181_200, contextWindow: 1_000_000, percent: 18}, flags: {'statusline.label': 'mine'}});
+		await t.fire('permission_mode_changed', {mode: 'bypass'});
+		assert.doesNotMatch(t.raw(), /\u001b\[2m/, 'ANSI faint is where terminal text loses its contrast headroom');
+		assert.doesNotMatch(t.raw(), /\u001b\[90m/, 'brightBlack is the faint-coloured slot by another name');
+	});
+
+	it('colours the model segment blue', async () => {
+		const t = await boot({});
+		assert.match(t.raw(), /\u001b\[34m\[deepseek-v4\.1-flash · high\]\u001b\[39m/);
+	});
+
+	it('colours the project segment purple', async () => {
+		const t = await boot({});
+		assert.match(t.raw(), /\u001b\[35mproject-alpha ⏱ \d+s\u001b\[39m/);
+	});
+
+	it('colours the counters cyan while the error count stays red', async () => {
+		const t = await boot({});
+		await t.fire('tool_completed', {});
+		await t.fire('tool_errored', {});
+		await t.fire('turn_end', {});
+		const raw = t.raw();
+		assert.match(raw, /\u001b\[31m✗1\u001b\[39m/, 'an error count must stay the danger colour');
+		assert.match(raw, /\u001b\[36m⚙2\u001b\[39m/);
+		assert.match(raw, /\u001b\[36m↻1\u001b\[39m/);
+	});
+
+	it('colours the skills count green', async () => {
+		const t = await boot({});
+		assert.match(t.raw(), /\u001b\[32m✓ Skills \(786\)\u001b\[39m/);
+	});
+
+	it('colours the git segment by meaning: branch blue, ahead green, behind yellow, counts too', async () => {
+		const t = await boot({git: '## main...origin/main [ahead 1, behind 2]\nM  s.ts\n M m.ts\n?? u.ts\n'});
+		const raw = t.raw();
+		assert.match(raw, /\u001b\[34m⎇ main\u001b\[39m/);
+		assert.match(raw, /\u001b\[32m↑1\u001b\[39m/);
+		assert.match(raw, /\u001b\[33m↓2\u001b\[39m/);
+		assert.match(raw, /\u001b\[32m\+1\u001b\[39m/);
+		assert.match(raw, /\u001b\[33m~1\u001b\[39m/);
+		assert.match(raw, /\u001b\[36m\?1\u001b\[39m/);
+	});
+
+	it('colours the permission mode yellow', async () => {
+		const t = await boot({});
+		await t.fire('permission_mode_changed', {mode: 'bypass'});
+		assert.match(t.raw(), /\u001b\[33m⏵⏵ bypass\u001b\[39m/);
+	});
+
+	it('colours the label white', async () => {
+		const t = await boot({flags: {'statusline.label': 'mine'}});
+		assert.match(t.raw(), /\u001b\[37mmine\u001b\[39m/);
+	});
+
+	it('renders an unmeasured context in white rather than faint', async () => {
+		const t = await boot({context: {tokens: null, contextWindow: 1_000_000, percent: null}});
+		assert.match(t.raw(), /\u001b\[37m□{10} — \(—\/1M\)\u001b\[39m/);
+	});
+});
+
 before(() => {
 	mkdirSync(SCRATCH, {recursive: true});
 });

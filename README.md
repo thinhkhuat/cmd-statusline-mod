@@ -132,17 +132,45 @@ one trims it, so `120000` reads `120k` rather than `120.0k`.)
   silently. (The previous revision of this mod did exactly that, then dropped the segment
   entirely — see `docs/investigation.md`.)
 
+## Colour
+
+One hue per section, every one a **theme-defined ANSI slot** — never a hardcoded RGB. A fixed hex
+holds one background mode and breaks the other; a theme slot is re-tuned by the terminal for its
+own light or dark palette, which is the only way the row adapts to *any* terminal.
+
+| Section | Colour | Slot |
+|---|---|---|
+| context fill | green, yellow at 50%, red at 80% · white when unmeasured | 32 / 33 / 31 / 37 |
+| model + effort | blue | 34 |
+| project + elapsed | purple | 35 |
+| counters (tools, subagents, turns) | cyan · the error count red | 36 / 31 |
+| skills | green | 32 |
+| git | branch blue · ahead/staged green · behind/modified yellow · untracked cyan | 34 / 32 / 33 / 36 |
+| permission mode | yellow | 33 |
+| label | white | 37 |
+
+`dim` (ANSI 2) and `brightBlack` are gone: both cut the contrast headroom the theme gave the text,
+and a uniformly muted row was the complaint. Colour is never the only cue — every section keeps its
+own glyph and words, so the row still reads with colour off (WCAG 1.4.1).
+
+**The limit, measured.** `tools/check-contrast.mjs` scores the palette against 811 real terminal
+themes. No set of distinct ANSI hues clears WCAG 1.4.3's 4.5:1 on every theme: the best any slot
+manages on *both* modes is blue 69%, purple 69%, red 65%, while cyan, green, yellow and white are
+dark-mode specialists. The palette therefore maximises the weaker mode, and the residual belongs
+to the theme, not the mod. Re-run the check after any colour change.
+
 ## Verify
 
 ```bash
-node --test test/statusline.test.mjs     # 63 tests, no network, no real config touched
+node --test test/statusline.test.mjs     # 72 tests, no network, no real config touched
+node tools/check-contrast.mjs            # the palette against 811 real themes; no network
 cmd mods list                            # registered, no load warnings
 cmd -p "Reply with exactly: ok"          # loads in a session and exits cleanly (no hang)
 ./tools/check-live-footer.sh             # drives the real TUI through a pty; spends one model call
 ```
 
 The suite drives the real mod file through Node's TypeScript stripping with a fake `ModApi`
-that records every call the mod makes to the host: 63 cases covering each segment, the
+that records every call the mod makes to the host: 72 cases covering each segment, the
 switch and precedence layers, the failure paths and the repaint triggers. `STATUSLINE_MOD=<path>`
 points it at a mutant for mutation testing. Nineteen seeded defects were each caught:
 
@@ -168,6 +196,11 @@ points it at a mutant for mutation testing. Nineteen seeded defects were each ca
 | the turn usage preferred over the harness measurement | `prefers the harness measurement over the turn usage when both exist` |
 | a pre-compaction figure kept across the reset | `drops the stale figure when a compaction resets the fill` |
 
+Nine colour tests were written before the palette existed and watched fail first — eight red, one
+already green. The four contrast gates in `tools/check-contrast.mjs` were each proven to bite on
+their own mutant: an identity slot swapped to an unbalanced hue, a faint slot smuggled back in,
+and state parity broken.
+
 ## Layout
 
 ```
@@ -177,6 +210,8 @@ tools/probe-modapi.ts             probe used to confirm the live ModApi shape
 tools/probe-commands.ts           probe used to confirm the slash command registered
 tools/probe-context.ts            probe that recorded the starved context seam (see below)
 tools/check-live-footer.sh        drives the real TUI through a pty and reads the footer it renders
+tools/check-contrast.mjs          scores the colour palette against real terminal themes
+tools/palettes.json               811 terminal themes (MIT) that the contrast check reads
 docs/investigation.md             root cause, the evidence trail, and the review round
 install.sh                        drop-in route: backup → copy → test → list
 archive/                          superseded revisions (gitignored)

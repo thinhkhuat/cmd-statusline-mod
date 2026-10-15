@@ -13,6 +13,11 @@
 //   ⎇ main ↑2↓1 +1 ~3 ?4          git branch, ahead/behind, staged/modified/untracked
 //   ⏵⏵ bypass                     permission mode
 //
+// Colour: one theme-defined ANSI hue per section — model blue, project purple, counters cyan,
+// skills green, git by meaning, mode yellow — and no `dim`/faint anywhere. ANSI_CODES and
+// SECTION_COLORS below are the single source of truth; tools/check-contrast.mjs scores them
+// against 811 real terminal themes and records what that cannot fix.
+//
 // Context comes from the harness's own measurement (`cmd.getContextUsage()`) whenever there is
 // one, and from the turn's reported usage otherwise — the `model_request_end` event's
 // `usage.inputTokens + usage.outputTokens`, the same quantity the harness's own compaction
@@ -56,7 +61,7 @@
 //
 // Verify: `cmd mods list` (registered, no warnings) · `cmd --mod <file> -p "hi"` (loads,
 // exits) · `cmd` then /reload, and read the footer row under the input.
-// Test: node --test .statusline-tests/statusline.test.mjs   (63 tests, from this directory)
+// Test: node --test .statusline-tests/statusline.test.mjs   (72 tests, from this directory)
 
 import type {ModApi} from '@commandcode/harness';
 import {mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync} from 'node:fs';
@@ -123,13 +128,51 @@ export interface GitInfo {
 
 const EMPTY_COUNTERS: Counters = {turns: 0, tools: 0, toolErrors: 0, subagents: 0};
 
-const ansi = {
-	dim: (s: string) => `\u001b[2m${s}\u001b[22m`,
-	gray: (s: string) => `\u001b[90m${s}\u001b[39m`,
-	green: (s: string) => `\u001b[32m${s}\u001b[39m`,
-	yellow: (s: string) => `\u001b[33m${s}\u001b[39m`,
-	red: (s: string) => `\u001b[31m${s}\u001b[39m`,
-};
+// Colour. Every slot is a theme-defined ANSI colour, so the terminal's own palette is what
+// adapts the row to a dark or a light background — a hardcoded RGB would hold one background
+// mode and break the other. No `dim`/faint and no `brightBlack`: both cut the contrast headroom
+// the theme gave the text.
+//
+// SECTION_COLORS is the single source of truth for which hue each section wears, exported so
+// tools/check-contrast.mjs scores exactly what this file renders — it is measured against 811
+// real terminal themes there, not asserted here.
+export const ANSI_CODES = {
+	red: 31,
+	green: 32,
+	yellow: 33,
+	blue: 34,
+	purple: 35,
+	cyan: 36,
+	white: 37,
+} as const;
+
+export const SECTION_COLORS = {
+	label: 'white',
+	contextUnknown: 'white',
+	contextOk: 'green',
+	contextWarning: 'yellow',
+	contextDanger: 'red',
+	model: 'blue',
+	project: 'purple',
+	counters: 'cyan',
+	counterErrors: 'red',
+	skills: 'green',
+	gitBranch: 'blue',
+	gitAhead: 'green',
+	gitBehind: 'yellow',
+	gitStaged: 'green',
+	gitModified: 'yellow',
+	gitUntracked: 'cyan',
+	mode: 'yellow',
+} as const;
+
+type ColorName = keyof typeof ANSI_CODES;
+
+const ansi = Object.fromEntries(
+	(Object.keys(ANSI_CODES) as ColorName[]).map(name => [name, (s: string) => `\u001b[${ANSI_CODES[name]}m${s}\u001b[39m`]),
+) as Record<ColorName, (s: string) => string>;
+
+const paint = (section: keyof typeof SECTION_COLORS, text: string): string => ansi[SECTION_COLORS[section]](text);
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────
 
@@ -468,11 +511,11 @@ export default function (cmd: ModApi): void {
 
 		switch (contextTone(percent)) {
 			case 'danger':
-				return ansi.red(text);
+				return paint('contextDanger', text);
 			case 'warning':
-				return ansi.yellow(text);
+				return paint('contextWarning', text);
 			default:
-				return percent === null ? ansi.dim(text) : ansi.green(text);
+				return paint(percent === null ? 'contextUnknown' : 'contextOk', text);
 		}
 	}
 
@@ -481,26 +524,26 @@ export default function (cmd: ModApi): void {
 		const effort = currentEffort || safe(() => cmd.getEffort?.()) || '';
 		const name = model.split('/').pop() || '…';
 		const dot = busy ? SPINNER_FRAMES[spinner] : active ? '○' : '·';
-		return ansi.dim(`[${name} ${dot}${effort ? ` ${effort}` : ''}]`);
+		return paint('model', `[${name} ${dot}${effort ? ` ${effort}` : ''}]`);
 	}
 
 	function countersSegment(): string | undefined {
 		const bits: string[] = [];
-		if (counters.toolErrors > 0) bits.push(ansi.red(`✗${counters.toolErrors}`));
-		if (counters.tools > 0) bits.push(ansi.dim(`⚙${counters.tools}`));
-		if (counters.subagents > 0) bits.push(ansi.dim(`⚡${counters.subagents}`));
-		if (counters.turns > 0) bits.push(ansi.dim(`↻${counters.turns}`));
+		if (counters.toolErrors > 0) bits.push(paint('counterErrors', `✗${counters.toolErrors}`));
+		if (counters.tools > 0) bits.push(paint('counters', `⚙${counters.tools}`));
+		if (counters.subagents > 0) bits.push(paint('counters', `⚡${counters.subagents}`));
+		if (counters.turns > 0) bits.push(paint('counters', `↻${counters.turns}`));
 		return bits.length > 0 ? bits.join(' ') : undefined;
 	}
 
 	function gitSegment(): string | undefined {
 		if (!gitInfo) return undefined;
-		const bits = [ansi.dim(`⎇ ${gitInfo.branch}`)];
-		if (gitInfo.ahead > 0) bits.push(ansi.green(`↑${gitInfo.ahead}`));
-		if (gitInfo.behind > 0) bits.push(ansi.yellow(`↓${gitInfo.behind}`));
-		if (gitInfo.staged > 0) bits.push(ansi.green(`+${gitInfo.staged}`));
-		if (gitInfo.modified > 0) bits.push(ansi.yellow(`~${gitInfo.modified}`));
-		if (gitInfo.untracked > 0) bits.push(ansi.gray(`?${gitInfo.untracked}`));
+		const bits = [paint('gitBranch', `⎇ ${gitInfo.branch}`)];
+		if (gitInfo.ahead > 0) bits.push(paint('gitAhead', `↑${gitInfo.ahead}`));
+		if (gitInfo.behind > 0) bits.push(paint('gitBehind', `↓${gitInfo.behind}`));
+		if (gitInfo.staged > 0) bits.push(paint('gitStaged', `+${gitInfo.staged}`));
+		if (gitInfo.modified > 0) bits.push(paint('gitModified', `~${gitInfo.modified}`));
+		if (gitInfo.untracked > 0) bits.push(paint('gitUntracked', `?${gitInfo.untracked}`));
 		return bits.join(' ');
 	}
 
@@ -510,24 +553,24 @@ export default function (cmd: ModApi): void {
 			const parts: string[] = [];
 
 			const label = stringOption('label');
-			if (label) parts.push(ansi.gray(label));
+			if (label) parts.push(paint('label', label));
 
 			if (boolOption('showContext')) {
 				const context = contextSegment();
 				if (context) parts.push(context);
 			}
 			if (boolOption('showModel')) parts.push(modelSegment());
-			if (boolOption('showProject')) parts.push(ansi.dim(`${basename(cmd.cwd) || '…'} ⏱ ${elapsedLabel(Date.now() - sessionStart)}`));
+			if (boolOption('showProject')) parts.push(paint('project', `${basename(cmd.cwd) || '…'} ⏱ ${elapsedLabel(Date.now() - sessionStart)}`));
 			if (boolOption('showCounters')) {
 				const segment = countersSegment();
 				if (segment) parts.push(segment);
 			}
-			if (boolOption('showSkills') && skillCount > 0) parts.push(ansi.dim(ansi.green(`✓ Skills (${skillCount})`)));
+			if (boolOption('showSkills') && skillCount > 0) parts.push(paint('skills', `✓ Skills (${skillCount})`));
 			if (boolOption('showGit')) {
 				const segment = gitSegment();
 				if (segment) parts.push(segment);
 			}
-			if (boolOption('showMode') && permissionMode) parts.push(ansi.dim(`⏵⏵ ${permissionMode}`));
+			if (boolOption('showMode') && permissionMode) parts.push(paint('mode', `⏵⏵ ${permissionMode}`));
 
 			cmd.ui.setStatus(parts.join(stringOption('separator')));
 		} catch (error) {

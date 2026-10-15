@@ -1,6 +1,6 @@
 {
 	"name": "cmd-statusline-mod",
-	"version": "1.1.1",
+	"version": "1.2.0",
 	"type": "module",
 	"description": "A configurable Command Code statusline: live context-window usage, model + effort, project, session counters, skills, git and permission mode.",
 	"repository": "https://github.com/thinhkhuat/cmd-statusline-mod",
