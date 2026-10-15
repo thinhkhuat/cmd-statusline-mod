@@ -305,3 +305,27 @@ the four properties that are ours — no faint slot, every slot above 3:1 on hal
 balanced identity slots, and the host's own state thresholds — and each gate was proven to bite on
 its own mutant.
 
+### Proven live
+
+Driving the real TUI through a pty (`tools/check-live-footer.sh`) and reading the row raw shows the
+hues arriving intact:
+
+```
+<E>[37m□□□□□□□□□□ — (—/1M)<E>[39m · <E>[34m[deepseek-v4.1-flash · high]<E>[39m · <E>[35mcmd-statusline-mod ⏱ 0s<E>[39m · <E>[32m✓ Sk…<E>[39m
+```
+
+`<E>[34m` 144 times, `<E>[35m` 144, `<E>[32m` 141 — and `\e[2m` **zero** times, so faint is gone
+from the real row, not merely from the source. The full row passes the check with model blue,
+project purple, skills green, counters cyan and no faint anywhere.
+
+Two properties of that capture were found the hard way and are now handled in the check, because
+each one first read as a defect in the mod:
+
+- the host writes the footer as **one fragment per styled span**, so a check cannot look for the
+  contiguity the source implies — `\e[32m✓ Skills` never appears as one piece even when both are
+  present. Read the raw stream, anchored on text only this mod emits.
+- the host **truncates the row to the terminal width**, so at the pty's default 80 columns the
+  counters, git and mode segments vanish behind an `…` and their hues look missing. The check now
+  drives a 220-column pty.
+
+
