@@ -61,7 +61,7 @@
 //
 // Verify: `cmd mods list` (registered, no warnings) · `cmd --mod <file> -p "hi"` (loads,
 // exits) · `cmd` then /reload, and read the footer row under the input.
-// Test: node --test .statusline-tests/statusline.test.mjs   (72 tests, from this directory)
+// Test: node --test .statusline-tests/statusline.test.mjs   (74 tests, from this directory)
 
 import type {ModApi} from '@commandcode/harness';
 import {mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync} from 'node:fs';
@@ -248,8 +248,23 @@ export function parseGitStatus(out: string): GitInfo | undefined {
 	return {branch, ahead, behind, staged, modified, untracked};
 }
 
-// `cmd skills list` prints the loader's own section counts, e.g. "Project (388)".
+// `cmd skills list` prints a section per root — "Project (388)", "Global (398)", "Bundled (6)" —
+// each listing the skills reachable through it, and those overlap: a skill reachable through two
+// roots is listed twice. On this machine the command prints 792 entries for 399 distinct skills,
+// which is why the segment read `✓ Skills (792)` while the harness's own panel said 399 loaded.
+// Count the names, not the headers.
+const SKILL_NAME_LINE = /^\s+([^\s·]+) · /;
+
 export function parseSkillCount(out: string): number {
+	const names = new Set<string>();
+	for (const line of out.split('\n')) {
+		const match = SKILL_NAME_LINE.exec(line);
+		if (match) names.add(match[1]);
+	}
+	if (names.size > 0) return names.size;
+
+	// No names listed (a drifted format, or a listing suppressed): fall back to the loader's own
+	// numbers, which may double-count, rather than to nothing at all.
 	let total = 0;
 	for (const line of out.split('\n')) {
 		const m = /^\s*(?:Bundled|Project|Global)\s*\((\d+)\)\s*$/.exec(line);

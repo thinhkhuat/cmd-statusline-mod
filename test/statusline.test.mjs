@@ -53,7 +53,22 @@ const settle = async (times = 4) => {
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const SKILLS_OUT = [' Skills  786 installed', '', 'Project (388)', '  a · x', 'Global (390)', 'Bundled (8)'].join('\n');
+// The loader lists a skill once per root it is reachable through, so the same name appears under
+// more than one section — as on this machine, where `cmd skills list` prints 792 entries for 399
+// distinct skills and the harness reports 399 loaded. `alpha` is under Project and Global here.
+const SKILLS_OUT = [
+	' Skills  5 installed',
+	'',
+	'Project (2)',
+	'  alpha · first',
+	'  beta · second',
+	'Global (2)',
+	'  alpha · first, reachable through a second root',
+	'  gamma · third',
+	'Bundled (1)',
+	'  delta · bundled',
+].join('\n');
+const SKILLS_OUT_HEADERS_ONLY = 'Project (388)\nGlobal (390)\nBundled (8)\n';
 
 async function boot(options = {}) {
 	const statuses = [];
@@ -400,8 +415,17 @@ describe('git segment', () => {
 });
 
 describe('skills segment', () => {
-	it('sums the loader section counts', () => {
-		assert.equal(parseSkillCount(SKILLS_OUT), 786);
+	it('counts each skill once, however many roots list it', () => {
+		assert.equal(parseSkillCount(SKILLS_OUT), 4, 'the name lines are the truth: five listed entries, four distinct skills');
+	});
+
+	it('does not add the section headers up when the names are listed', () => {
+		// The headers sum to 5 while only 4 skills exist. Summing them is the 792-vs-399 defect.
+		assert.notEqual(parseSkillCount(SKILLS_OUT), 5);
+	});
+
+	it('falls back to the section sum only when no names are listed', () => {
+		assert.equal(parseSkillCount(SKILLS_OUT_HEADERS_ONLY), 786);
 	});
 
 	it('falls back to the "N installed" header if section format drifts', () => {
@@ -411,7 +435,7 @@ describe('skills segment', () => {
 
 	it('renders the count from the harness loader', async () => {
 		const t = await boot({});
-		assert.match(t.status(), /✓ Skills \(786\)/);
+		assert.match(t.status(), /✓ Skills \(4\)/);
 	});
 
 	it('hides when the loader call fails', async () => {
@@ -759,7 +783,7 @@ describe('segment colours', () => {
 
 	it('colours the skills count green', async () => {
 		const t = await boot({});
-		assert.match(t.raw(), /\u001b\[32m✓ Skills \(786\)\u001b\[39m/);
+		assert.match(t.raw(), /\u001b\[32m✓ Skills \(4\)\u001b\[39m/);
 	});
 
 	it('colours the git segment by meaning: branch blue, ahead green, behind yellow, counts too', async () => {

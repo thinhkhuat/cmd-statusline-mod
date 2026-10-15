@@ -278,6 +278,35 @@ fallback for when no provider measurement exists. If `/context` shows real numbe
 seam answers `null`, then the seam — not the measurement — is the defect to report upstream, and
 this stand-in can retire.
 
+## Two context numbers, and a skills count that was simply wrong (2026-10-15, live)
+
+The cross-check the earlier session left open, run by the user: the segment read
+`■■■■□□□□□□ 40% (401.8k/1M) · … ✓ Skills (792)` while `/context` read
+
+```
+294.3k / 1M · 705.7k remaining (estimated)
+Subagents 74.0k · Skills 40.9k · Memory 14.2k · System tools 12.6k · Messages 152.5k
+```
+
+**The context numbers measure different things; the segment is the measured one.** The panel's total
+is the sum of its own component rows and it labels itself `(estimated)` — from
+`computeContextUsage`, which uses `estimateTokens4(state.messages)` (a char-count estimate) whenever
+`lastInputTokens` is not a number. Its rows have no entry for the base system prompt, and on this
+session no `MCP` row at all (`buildContextRows` gates that row on `y > 0`) despite dozens of MCP tool
+schemas being sent; its `Messages` row counts 8 user + 134 assistant and so carries no tool-result
+payloads, which are the bulk of an agentic context. The segment instead reports the provider's own
+count of the prompt it received — and that is the number the harness's compaction gate is built on:
+the built-in tracker's `onTurnEnd({usage})` stores `usage.inputTokens + estimate(lastAssistant)` and
+`transformContext` compares the same value against its thresholds to decide when to compact. Two
+surfaces, one measured and one estimated; they will not agree, and the measured one is the window.
+
+**The skills count was a straight defect, now fixed.** `cmd skills list` prints a section per root
+(`Project (388)`, `Global (398)`, `Bundled (6)`) and repeats a skill under every root that reaches
+it, so the headers summed to **792** while only **399** names were distinct. The panel said
+`399 loaded`, which matched the distinct count exactly. `parseSkillCount` now counts names, not
+headers — 399 on this machine — and falls back to the header sum only when no names are listed.
+Restored agreement is the evidence: the segment and the panel now print the same number.
+
 ## Colour: what a statusline can and cannot guarantee (2026-10-15)
 
 Every section wore `dim` (ANSI 2) except the context bar. The ask was to colour the row by section

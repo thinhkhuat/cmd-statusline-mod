@@ -159,10 +159,19 @@ manages on *both* modes is blue 69%, purple 69%, red 65%, while cyan, green, yel
 dark-mode specialists. The palette therefore maximises the weaker mode, and the residual belongs
 to the theme, not the mod. Re-run the check after any colour change.
 
+**It will not match `/context`, and the segment is the one to trust.** The harness's own `/context`
+panel reports a different quantity: a sum of the component rows it tracks, printed with an
+`(estimated)` label. Measured on one session, the segment read `40% (401.8k/1M)` while the panel read
+`294.3k / 1M … (estimated)` — the panel has no row for the base system prompt or for MCP tool schemas,
+and its `Messages` row counts user and assistant text without the tool-result payloads that dominate an
+agentic context. The segment instead shows the provider's own count of the prompt it was sent (the
+`usage.inputTokens` the harness's compaction gate is itself computed from), so it is the number tied to
+the model's real window.
+
 ## Verify
 
 ```bash
-node --test test/statusline.test.mjs     # 72 tests, no network, no real config touched
+node --test test/statusline.test.mjs     # 74 tests, no network, no real config touched
 node tools/check-contrast.mjs            # the palette against 811 real themes; no network
 cmd mods list                            # registered, no load warnings
 cmd -p "Reply with exactly: ok"          # loads in a session and exits cleanly (no hang)
@@ -170,7 +179,7 @@ cmd -p "Reply with exactly: ok"          # loads in a session and exits cleanly 
 ```
 
 The suite drives the real mod file through Node's TypeScript stripping with a fake `ModApi`
-that records every call the mod makes to the host: 72 cases covering each segment, the
+that records every call the mod makes to the host: 74 cases covering each segment, the
 switch and precedence layers, the failure paths and the repaint triggers. `STATUSLINE_MOD=<path>`
 points it at a mutant for mutation testing. Nineteen seeded defects were each caught:
 
@@ -199,7 +208,8 @@ points it at a mutant for mutation testing. Nineteen seeded defects were each ca
 Nine colour tests were written before the palette existed and watched fail first — eight red, one
 already green. The four contrast gates in `tools/check-contrast.mjs` were each proven to bite on
 their own mutant: an identity slot swapped to an unbalanced hue, a faint slot smuggled back in,
-and state parity broken.
+and state parity broken. The skills-deduplication pair was likewise red first, against a fixture
+that lists one skill under two roots — the shape this machine actually produces.
 
 ## Layout
 
@@ -247,7 +257,9 @@ PROBE_LOG=/tmp/probe.log cmd -p --mod tools/probe-modapi.ts "Reply with exactly:
   plan/bypass mode shows nothing until the mode changes.
 - The skills count comes from a separate `cmd skills list` process — a disk view, refreshed at
   load, session start and `/statusline refresh`. It cannot see session-scoped skill paths and
-  does not track skills added mid-session.
+  does not track skills added mid-session. It counts each skill **once**, however many roots reach
+  it: the loader lists a skill per root, so its section headers summed to 792 on a machine holding
+  399 distinct skills, which is the inflated number the segment used to report.
 - Command Code's **built-in** context indicator behaves differently: below 70% usage it shows
   nothing at all, unless more than ~180k tokens are in context, in which case it shows a
   `~N tokens in context · try /compact` nudge. The mod's segment is independent of it and
